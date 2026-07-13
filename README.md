@@ -15,15 +15,26 @@
 - ✅ 通報模板：CMS + 中/英/日/韓（LLM fallback 保證）
 - ✅ 測試：30 項全數通過（技術文件 19.1–19.3 + 端到端 Demo 場景）
 
-尚未做（Phase 2+）：React Dashboard、Mapbox/H3 視覺化、WebSocket 推送、
-LLM 解釋與 What-if 自然語言解析、AWS 部署。
+## Phase 2 進度
+
+- ✅ React + TypeScript + MapLibre Dashboard（`frontend/`）：狀態卡、路段地圖
+  （飽和度上色、主/次疏散、封閉路段圖層）、車流/人流清單、自動預警、
+  事件注入面板、決策鏈時間軸、What-if 對話
+- ✅ What-if 自然語言解析（確定性 regex 版，`/api/what-if/nl`；之後可換 LLM 共用同一 sandbox）
+- 尚未做：WebSocket 推送（目前輪詢）、H3 區域風險層、LLM 解釋潤飾、AWS 部署
 
 ## 快速開始
 
 ```powershell
+# 後端
 cd backend
 pip install -r requirements.txt
-uvicorn app.api.main:app --reload --port 8000
+python -m uvicorn app.api.main:app --port 8000
+
+# 前端（另開視窗）
+cd frontend
+npm install
+npm run dev   # http://localhost:5173，/api 自動 proxy 到 8000
 ```
 
 跑測試（於專案根目錄）：

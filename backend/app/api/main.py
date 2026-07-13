@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from ..coordinator.coordinator import Coordinator, DataBundle
 from ..coordinator.whatif import run_what_if
+from ..coordinator.whatif_nl import parse_question
 from ..simulation.player import SimulationPlayer
 
 app = FastAPI(title="城市應變分析 AI Command Center", version="0.1.0")
@@ -132,6 +133,22 @@ def get_incident(incident_id: str):
 @app.post("/api/what-if")
 def what_if(req: WhatIfRequest):
     return run_what_if(bundle, req.model_dump(exclude_none=True))
+
+
+class WhatIfNLRequest(BaseModel):
+    question: str
+
+
+@app.post("/api/what-if/nl")
+def what_if_nl(req: WhatIfNLRequest):
+    """自然語言 What-if：先確定性解析，再走同一套 Sandbox 引擎。"""
+    try:
+        scenario = parse_question(req.question)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    result = run_what_if(bundle, scenario)
+    result["parsed_from"] = req.question
+    return result
 
 
 # ---- 16.6–16.7 決策鏈與通報 ----
