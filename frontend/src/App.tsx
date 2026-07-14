@@ -4,7 +4,9 @@ import MapView from "./MapView";
 import {
   AlertFeed,
   CrowdPanel,
+  CustomEventForm,
   IncidentPanel,
+  NotificationLifecyclePanel,
   ResourcePanel,
   StatusCards,
   TracePanel,
@@ -112,6 +114,14 @@ export default function App() {
             onRefresh={refreshIncident}
             busy={busy}
           />
+          <CustomEventForm
+            onInjected={(state) => {
+              setIncident(state);
+              setResourceKey((k) => k + 1);
+              api.simSeek(state.event.timestamp).then(setView).catch(() => {});
+            }}
+          />
+          <NotificationLifecyclePanel refreshKey={resourceKey} />
           <ResourcePanel refreshKey={resourceKey} />
         </div>
       </main>

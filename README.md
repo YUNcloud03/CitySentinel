@@ -31,7 +31,19 @@
 - ✅ **可 Challenge 決策**：每個調度動作附證據包（rule_id、snapshot、challenge 問題），
   管理者可接受/拒絕/調整，覆寫寫入決策鏈稽核並保留原始 Agent 建議
 - ✅ **ETE 來源明確化**：回應含 `saturation_source_segments` 供評審重算
-- 尚未做：WebSocket 推送（目前輪詢）、H3 區域風險層、LLM 解釋潤飾、推播送達狀態機、AWS 部署
+
+## Phase 4 進度（推播閉環 + 事件模擬器 + 真 LLM）
+
+- ✅ **推播送達狀態機**：DRAFTED→待核准→核准→發布→送達確認/失敗→重試；
+  模擬 Adapter 回傳送達狀態；未核准不得發布（生成 ≠ 送達）
+- ✅ **自訂事件模擬器**：Pydantic schema 驗證（路段存在性、enum、時間格式）、
+  simulation_run_id 紀錄、走同一套 Coordinator
+- ✅ **LLM 層（真接入）**：provider 自動偵測（ANTHROPIC_API_KEY→Claude claude-opus-4-8
+  優先，OPENAI_API_KEY 次之，皆無則確定性模板）；AI 交控摘要 + What-if NL 第二層解析；
+  Guardrails：structured output schema 驗證、cited_rule_ids 必須是已觸發條款子集、
+  編造的站點/路段 ID 一律拒絕、requires_human_approval 強制為 true、
+  LLM 失敗一律 fallback 不中斷主流程、LLM 不可直接呼叫發布 API
+- 尚未做：WebSocket 推送（目前輪詢）、H3 區域風險層、AWS 部署
 
 ## 快速開始
 

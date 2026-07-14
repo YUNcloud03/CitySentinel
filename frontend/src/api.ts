@@ -99,6 +99,12 @@ export const api = {
   resources: () => get<Resource[]>("/api/resources"),
   resetResources: () => post<any>("/api/resources/reset"),
   incidentState: (id: string) => get<IncidentState>(`/api/incidents/${id}`),
+  notifications: () => get<any[]>("/api/notifications"),
+  notificationOp: (id: string, op: "approve" | "dispatch" | "retry") =>
+    post<any>(`/api/notifications/${id}/${op}`),
+  customIncident: (payload: any) => post<IncidentState>("/api/incidents/custom", payload),
+  aiSummary: (incidentId: string) => post<any>(`/api/incidents/${incidentId}/ai-summary`),
+  llmStatus: () => get<{ provider: string | null; available: boolean }>("/api/llm/status"),
   dispatchAction: (
     incidentId: string,
     actionId: string,

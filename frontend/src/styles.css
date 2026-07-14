@@ -190,6 +190,45 @@ summary { cursor: pointer; color: #7dd3fc; font-size: 12.5px; }
 .da-actions { display: flex; gap: 6px; margin-top: 6px; }
 .da-actions button { font-size: 11px; padding: 3px 10px; }
 
+/* 通報生命週期 */
+.noti {
+  border: 1px solid var(--border); border-radius: 7px;
+  padding: 8px; margin: 6px 0; background: var(--panel-2);
+}
+.noti-head { display: flex; justify-content: space-between; align-items: center; }
+.noti-status { font-size: 10.5px; padding: 1px 8px; border-radius: 10px; }
+.s-READY_FOR_APPROVAL { background: #1e293b; color: #93c5fd; }
+.s-APPROVED { background: #3f2b05; color: var(--amber); }
+.s-DISPATCHING, .s-RETRYING { background: #172554; color: #93c5fd; }
+.s-DELIVERY_CONFIRMED { background: #052e16; color: var(--green); }
+.s-DELIVERY_FAILED { background: #450a0a; color: var(--red); }
+.noti-deliveries { display: flex; gap: 6px; margin: 5px 0; }
+.small { font-size: 11px; }
+
+/* 自訂事件表單 */
+.custom-event summary h3 { margin: 0; }
+.form-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0;
+}
+.form-grid label {
+  display: flex; flex-direction: column; gap: 3px;
+  font-size: 11.5px; color: var(--dim);
+}
+.form-grid select {
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px;
+}
+
+/* AI 摘要 */
+.ai-summary h4 .mini { float: right; font-size: 10.5px; padding: 2px 8px; }
+.ai-box {
+  border: 1px solid #1d4ed8; border-radius: 8px;
+  padding: 10px; margin-top: 6px; background: #0c1a3a;
+}
+.ai-box.fallback { border-color: var(--amber); background: #1a1206; }
+.ai-box p { margin: 8px 0; font-size: 12.5px; line-height: 1.6; }
+.ai-meta { display: flex; gap: 6px; flex-wrap: wrap; }
+
 /* 底部 */
 footer { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .trace-flow { display: flex; gap: 0; overflow-x: auto; padding: 8px 0; }

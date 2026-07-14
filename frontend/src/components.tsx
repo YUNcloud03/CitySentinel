@@ -390,6 +390,8 @@ function IncidentDetail({ incident, onRefresh }: { incident: IncidentState; onRe
 
       <DispatchSection incident={incident} onRefresh={onRefresh} />
 
+      <AISummarySection incident={incident} />
+
       {incident.trigger_details && incident.trigger_details.length > 0 && (
         <details>
           <summary>觸發證據與處置動作</summary>
@@ -426,6 +428,212 @@ function IncidentDetail({ incident, onRefresh }: { incident: IncidentState; onRe
               </div>
             ))}
         </>
+      )}
+    </div>
+  );
+}
+
+// ---- 通報生命週期（核准 → 發布 → 送達） ----
+
+const NOTI_STATUS_LABEL: Record<string, string> = {
+  READY_FOR_APPROVAL: "待核准",
+  APPROVED: "已核准",
+  DISPATCHING: "發送中",
+  DELIVERY_CONFIRMED: "已送達",
+  DELIVERY_FAILED: "送達失敗",
+  RETRYING: "重試中",
+};
+
+export function NotificationLifecyclePanel({ refreshKey }: { refreshKey: number }) {
+  const [items, setItems] = useState<any[]>([]);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const reload = () => { api.notifications().then(setItems).catch(() => {}); };
+  useEffect(reload, [refreshKey]);
+
+  const op = async (id: string, action: "approve" | "dispatch" | "retry") => {
+    setBusyId(id);
+    try {
+      await api.notificationOp(id, action);
+      reload();
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  if (!items.length) return null;
+  return (
+    <div className="panel">
+      <h3>通報發布中心</h3>
+      {items.map((n) => (
+        <div className={`noti noti-${n.status}`} key={n.notification_id}>
+          <div className="noti-head">
+            <b>{n.notification_id}</b>
+            <span className={`noti-status s-${n.status}`}>{NOTI_STATUS_LABEL[n.status] ?? n.status}</span>
+          </div>
+          <div className="dim small">{n.incident_id}｜{n.target_area}｜{n.languages.join("/")}</div>
+          {n.cms && <div className="cms small">{n.cms}</div>}
+          {n.deliveries && (
+            <div className="noti-deliveries">
+              {n.deliveries.map((d: any) => (
+                <span key={d.channel}
+                  className={`chip ${d.status === "DELIVERY_CONFIRMED" ? "green" : "red"}`}
+                  title={d.detail}>
+                  {d.channel} {d.status === "DELIVERY_CONFIRMED" ? "✓" : "✕"}
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="da-actions">
+            {n.status === "READY_FOR_APPROVAL" && (
+              <button disabled={busyId === n.notification_id}
+                onClick={() => op(n.notification_id, "approve")}>核准</button>
+            )}
+            {n.status === "APPROVED" && (
+              <button disabled={busyId === n.notification_id}
+                onClick={() => op(n.notification_id, "dispatch")}>發布</button>
+            )}
+            {n.status === "DELIVERY_FAILED" && (
+              <button disabled={busyId === n.notification_id}
+                onClick={() => op(n.notification_id, "retry")}>重試失敗通道</button>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---- 自訂事件模擬器 ----
+
+const SEGMENT_OPTIONS = [
+  ["RD_TPE_001", "忠孝東路四段"], ["RD_TPE_002", "光復南路"], ["RD_TPE_003", "基隆路一段"],
+  ["RD_TPE_004", "市民大道四段"], ["RD_TPE_005", "仁愛路四段"], ["RD_TPE_006", "敦化南路一段"],
+  ["RD_TPE_007", "松高路"], ["RD_TPE_008", "延吉街"], ["RD_TPE_009", "基隆路地下道"],
+  ["RD_TPE_010", "市府路"], ["RD_TPE_011", "松壽路"], ["RD_TPE_012", "敦化南路二段"],
+  ["RD_TPE_013", "信義路五段"], ["RD_TPE_014", "松智路"], ["RD_TPE_015", "復興南路一段"],
+];
+
+export function CustomEventForm({ onInjected }: { onInjected: (state: IncidentState) => void }) {
+  const [form, setForm] = useState({
+    type: "Road_Collapse",
+    affected_segment: "RD_TPE_003",
+    status: "Closed",
+    severity: "High",
+    timestamp: "2026-05-20 22:00",
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
+
+  const submit = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const segName = SEGMENT_OPTIONS.find(([id]) => id === form.affected_segment)?.[1] ?? "";
+      const state = await api.customIncident({
+        ...form,
+        location: segName,
+        description: `自訂模擬事件：${segName} ${form.type}`,
+      });
+      onInjected(state);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <details className="panel custom-event">
+      <summary><h3 style={{ display: "inline" }}>自訂事件模擬器</h3></summary>
+      <div className="form-grid">
+        <label>路段
+          <select value={form.affected_segment} onChange={(e) => set("affected_segment", e.target.value)}>
+            {SEGMENT_OPTIONS.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+          </select>
+        </label>
+        <label>類型
+          <select value={form.type} onChange={(e) => set("type", e.target.value)}>
+            <option value="Road_Collapse">路面塌陷</option>
+            <option value="Traffic_Accident">交通事故</option>
+            <option value="Power_Failure">號誌故障</option>
+            <option value="Flooding">道路積水</option>
+          </select>
+        </label>
+        <label>狀態
+          <select value={form.status} onChange={(e) => set("status", e.target.value)}>
+            <option>Closed</option><option>Blocked</option>
+            <option>Restricted</option><option>Caution</option>
+          </select>
+        </label>
+        <label>嚴重度
+          <select value={form.severity} onChange={(e) => set("severity", e.target.value)}>
+            <option>Critical</option><option>High</option>
+            <option>Medium</option><option>Low</option>
+          </select>
+        </label>
+        <label>時間
+          <select value={form.timestamp} onChange={(e) => set("timestamp", e.target.value)}>
+            {["17:00", "19:00", "21:00", "21:30", "22:00", "22:15", "22:30"].map((t) => (
+              <option key={t} value={`2026-05-20 ${t}`}>{t}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <button className="primary" disabled={busy} onClick={submit}>
+        {busy ? "分析中…" : "注入模擬事件"}
+      </button>
+      {error && <div className="warn">{error}</div>}
+    </details>
+  );
+}
+
+// ---- AI 摘要 ----
+
+export function AISummarySection({ incident }: { incident: IncidentState }) {
+  const [summary, setSummary] = useState<any>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => setSummary((incident as any).ai_summary ?? null), [incident.incident_id]);
+
+  const generate = async () => {
+    setBusy(true);
+    try {
+      setSummary(await api.aiSummary(incident.incident_id));
+    } catch { /* ignore */ } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="ai-summary">
+      <h4>
+        AI 交控摘要
+        <button className="mini" disabled={busy} onClick={generate}>
+          {busy ? "生成中…" : summary ? "重新生成" : "生成"}
+        </button>
+      </h4>
+      {summary && (
+        <div className={`ai-box ${summary.llm_generated ? "" : "fallback"}`}>
+          <div className="ai-meta">
+            {summary.llm_generated
+              ? <span className="chip green">LLM 生成（{summary.provider}）</span>
+              : <span className="chip amber">確定性模板（LLM 未啟用或被 guardrail 攔截）</span>}
+            <span className="chip green">需人工核准</span>
+          </div>
+          <p>{summary.summary}</p>
+          <div>引用條款：{summary.cited_rule_ids.map((r: number) => <RuleBadge key={r} id={r} />)}</div>
+          {summary.recommended_actions?.length > 0 && (
+            <ul className="actions">
+              {summary.recommended_actions.map((a: string, i: number) => <li key={i}>{a}</li>)}
+            </ul>
+          )}
+          {summary.guardrail_rejected && (
+            <div className="warn small">⚠ {summary.guardrail_rejected}</div>
+          )}
+        </div>
       )}
     </div>
   );

@@ -23,6 +23,7 @@ from ..data_loader import (
     traffic_snapshot,
 )
 from ..engines import ete_calculator, routing_engine, rule_engine
+from ..notifications_center import NotificationCenter
 from ..resources import dispatch_engine
 from ..resources.registry import ResourceRegistry
 from ..retrievers.sop_retriever import SOPRetriever
@@ -38,6 +39,7 @@ class DataBundle:
         self.incidents = {i["event_id"]: i for i in load_incidents()}
         self.sop = SOPRetriever()
         self.registry = ResourceRegistry()
+        self.notification_center = NotificationCenter()
 
     def traffic_at(self, at: datetime):
         return traffic_snapshot(self.traffic, at)
@@ -199,10 +201,19 @@ class Coordinator:
 
             # CONTENT_GENERATED
             state["notifications"] = self._generate_notifications(state, incident, at, crowd_triggers)
-            step("CONTENT_GENERATED", {"channels": list(state["notifications"].keys())})
+            notification = self.bundle.notification_center.create_from_incident(state)
+            state["notification_id"] = notification["notification_id"]
+            step("CONTENT_GENERATED", {
+                "channels": list(state["notifications"].keys()),
+                "notification_id": notification["notification_id"],
+            })
 
-            # PUBLISHED（Demo 內為推送 Dashboard；實際發布須人工確認）
-            step("PUBLISHED", {"note": "結果已可供 Dashboard 讀取；對外發布需人工確認"})
+            # PUBLISHED：僅代表結果可供 Dashboard 讀取；
+            # 對外推播進入 READY_FOR_APPROVAL，需人工核准後才 dispatch
+            step("PUBLISHED", {
+                "note": "Dashboard 已更新；對外通報待人工核准",
+                "notification_status": notification["status"],
+            })
 
             state["workflow_status"] = "completed"
             state["current_step"] = "COMPLETED"
