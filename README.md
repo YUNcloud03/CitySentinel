@@ -21,7 +21,17 @@
   （飽和度上色、主/次疏散、封閉路段圖層）、車流/人流清單、自動預警、
   事件注入面板、決策鏈時間軸、What-if 對話
 - ✅ What-if 自然語言解析（確定性 regex 版，`/api/what-if/nl`；之後可換 LLM 共用同一 sandbox）
-- 尚未做：WebSocket 推送（目前輪詢）、H3 區域風險層、LLM 解釋潤飾、AWS 部署
+
+## Phase 3 進度（依評審優化建議）
+
+- ✅ **Resource Registry 與資源調度**：警力/接駁/號誌/北捷資源庫存，依 SOP 與嚴重度
+  產生調度需求並扣減可用量；資源不足回報缺口與人工升級，不標示為已完成
+- ✅ **規則歸因**：`triggered_rules` 拆成 `caused_by_incident` / `context_rules` /
+  `calculation_rules`，避免「路面塌陷觸發大巨蛋散場」這類誤導；調度只看事件造成的規則
+- ✅ **可 Challenge 決策**：每個調度動作附證據包（rule_id、snapshot、challenge 問題），
+  管理者可接受/拒絕/調整，覆寫寫入決策鏈稽核並保留原始 Agent 建議
+- ✅ **ETE 來源明確化**：回應含 `saturation_source_segments` 供評審重算
+- 尚未做：WebSocket 推送（目前輪詢）、H3 區域風險層、LLM 解釋潤飾、推播送達狀態機、AWS 部署
 
 ## 快速開始
 

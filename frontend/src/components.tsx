@@ -1,5 +1,13 @@
-import { useState } from "react";
-import type { Alert, CrowdRow, IncidentState, SimView, TrafficRow } from "./api";
+import { useEffect, useState } from "react";
+import { api, type Alert, type CrowdRow, type IncidentState, type Resource, type SimView, type TrafficRow } from "./api";
+
+const RES_TYPE_LABEL: Record<string, string> = {
+  Police: "交通警力",
+  Shuttle: "接駁車",
+  SignalMaintenance: "號誌維修",
+  SignalControl: "號誌控制",
+  MRTLiaison: "北捷聯絡",
+};
 
 const RULE_NAMES: Record<number, string> = {
   1: "壅塞分級",
@@ -144,17 +152,64 @@ export function AlertFeed({ alerts }: { alerts: Alert[] }) {
   );
 }
 
+// ---- 資源庫存面板 ----
+
+export function ResourcePanel({ refreshKey }: { refreshKey: number }) {
+  const [resources, setResources] = useState<Resource[]>([]);
+
+  useEffect(() => {
+    api.resources().then(setResources).catch(() => {});
+  }, [refreshKey]);
+
+  const reset = async () => {
+    await api.resetResources();
+    setResources(await api.resources());
+  };
+
+  return (
+    <div className="panel">
+      <h3>
+        資源庫存
+        <button className="mini" onClick={reset}>重置</button>
+      </h3>
+      <table>
+        <thead>
+          <tr><th>資源</th><th>可用/總量</th><th>ETA</th><th>狀態</th></tr>
+        </thead>
+        <tbody>
+          {resources.map((r) => {
+            const ratio = r.available_count / r.total_count;
+            const cls = ratio === 0 ? "red" : ratio < 0.5 ? "amber" : "green";
+            return (
+              <tr key={r.resource_id}>
+                <td title={r.current_location}>{r.label}</td>
+                <td>
+                  <span className={`chip ${cls}`}>{r.available_count}/{r.total_count}</span>
+                </td>
+                <td>{r.eta_minutes} 分</td>
+                <td className="dim">{RES_TYPE_LABEL[r.resource_type] ?? r.resource_type}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ---- 事件中心 ----
 
 export function IncidentPanel({
   available,
   incident,
   onInject,
+  onRefresh,
   busy,
 }: {
   available: any[];
   incident: IncidentState | null;
   onInject: (id: string) => void;
+  onRefresh: () => void;
   busy: boolean;
 }) {
   return (
@@ -172,20 +227,127 @@ export function IncidentPanel({
           </button>
         ))}
       </div>
-      {incident && <IncidentDetail incident={incident} />}
+      {incident && <IncidentDetail incident={incident} onRefresh={onRefresh} />}
     </div>
   );
 }
 
-function IncidentDetail({ incident }: { incident: IncidentState }) {
+// ---- 調度動作卡（可 Challenge） ----
+
+function DispatchSection({
+  incident,
+  onRefresh,
+}: {
+  incident: IncidentState;
+  onRefresh: () => void;
+}) {
+  const dispatch = incident.dispatch;
+  const [busyId, setBusyId] = useState<string | null>(null);
+  if (!dispatch || !dispatch.actions?.length) return null;
+
+  const act = async (
+    actionId: string,
+    op: "accept" | "reject" | "adjust",
+    extra: { count?: number; reason?: string } = {}
+  ) => {
+    setBusyId(actionId);
+    try {
+      await api.dispatchAction(incident.incident_id, actionId, op, {
+        ...extra,
+        operator: "traffic_commander_01",
+      });
+      onRefresh();
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <>
+      <h4>
+        資源調度與人工指揮
+        {dispatch.has_shortfall && <span className="chip red">資源缺口</span>}
+      </h4>
+      {dispatch.actions.map((a: any) => (
+        <div className={`dispatch-action status-${a.status}`} key={a.action_id}>
+          <div className="da-head">
+            <RuleBadge id={a.rule_id} />
+            <span className="da-title">{a.action}</span>
+            <span className={`da-status ${a.status}`}>{statusLabel(a.status)}</span>
+          </div>
+          <div className="da-detail">{a.deterministic_result}</div>
+          <div className="da-assign">
+            配置：
+            {a.assignments.length
+              ? a.assignments.map((x: any) => `${x.label} ×${x.count}（ETA ${x.eta_minutes}分）`).join("、")
+              : "—"}
+            {a.gap > 0 && <span className="warn"> 缺 {a.gap} 單位</span>}
+          </div>
+          {a.escalation && <div className="da-escalation">⚠ {a.escalation}</div>}
+          {a.agent_recommended_count && a.agent_recommended_count !== a.requested_count && (
+            <div className="dim">（Agent 原建議 {a.agent_recommended_count} 單位，已人工調整為 {a.requested_count}）</div>
+          )}
+          <details className="da-challenge">
+            <summary>Challenge：查看證據</summary>
+            <div className="mono small">
+              action_id: {a.action_id}{"\n"}
+              rule_id: {a.rule_id}｜source: {a.source}{"\n"}
+              input_snapshot: {a.input_snapshot_id}{"\n"}
+              challenge: {a.challenge_question}
+            </div>
+          </details>
+          {a.override && (
+            <div className="da-override">
+              人工覆寫：{a.override.override_by}｜{a.override.op}｜{a.override.override_reason || "（未填理由）"}｜{a.override.override_at}
+            </div>
+          )}
+          {a.status !== "rejected" && (
+            <div className="da-actions">
+              <button disabled={busyId === a.action_id} onClick={() => act(a.action_id, "accept")}>接受</button>
+              <button disabled={busyId === a.action_id} onClick={() => {
+                const c = prompt(`調整 ${a.action} 的派遣數量：`, String(a.requested_count));
+                if (c && !Number.isNaN(Number(c))) act(a.action_id, "adjust", { count: Number(c), reason: "現場人工調整" });
+              }}>調整</button>
+              <button disabled={busyId === a.action_id} onClick={() => {
+                const r = prompt("拒絕理由：", "現場已有資源");
+                if (r !== null) act(a.action_id, "reject", { reason: r });
+              }}>拒絕</button>
+            </div>
+          )}
+        </div>
+      ))}
+    </>
+  );
+}
+
+function statusLabel(s: string): string {
+  return { proposed: "待核准", accepted: "已接受", adjusted: "已調整", rejected: "已拒絕", shortfall: "資源不足" }[s] ?? s;
+}
+
+function IncidentDetail({ incident, onRefresh }: { incident: IncidentState; onRefresh: () => void }) {
   const routing = incident.routing_result;
   const ete = incident.ete_result;
   const noti = incident.notifications;
+  const attr = incident.rule_attribution;
   return (
     <div className="incident-detail">
-      <div className="row">
-        {incident.triggered_rules.map((r) => <RuleBadge key={r} id={r} />)}
-      </div>
+      {attr ? (
+        <div className="attribution">
+          <div><span className="attr-label caused">事件觸發</span>
+            {attr.caused_by_incident.length ? attr.caused_by_incident.map((r) => <RuleBadge key={r} id={r} />) : <span className="dim">無</span>}</div>
+          {attr.calculation_rules.length > 0 && (
+            <div><span className="attr-label calc">計算條款</span>
+              {attr.calculation_rules.map((r) => <RuleBadge key={r} id={r} />)}</div>
+          )}
+          {attr.context_rules.length > 0 && (
+            <div><span className="attr-label context">情境參考</span>
+              {attr.context_rules.map((r) => <RuleBadge key={r} id={r} />)}
+              <span className="dim">（同時段環境監測，非本事件造成）</span></div>
+          )}
+        </div>
+      ) : (
+        <div className="row">{incident.triggered_rules.map((r) => <RuleBadge key={r} id={r} />)}</div>
+      )}
       <p className="desc">{incident.event.description}</p>
 
       {routing && (
@@ -220,8 +382,13 @@ function IncidentDetail({ incident }: { incident: IncidentState }) {
         <>
           <h4>ETE 計算</h4>
           <div className="mono">{ete.formula}</div>
+          {ete.saturation_source_segments && (
+            <div className="dim small">飽和度來源：{ete.saturation_source_segments.join("、")}</div>
+          )}
         </>
       )}
+
+      <DispatchSection incident={incident} onRefresh={onRefresh} />
 
       {incident.trigger_details && incident.trigger_details.length > 0 && (
         <details>

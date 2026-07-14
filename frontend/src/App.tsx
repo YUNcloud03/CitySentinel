@@ -5,6 +5,7 @@ import {
   AlertFeed,
   CrowdPanel,
   IncidentPanel,
+  ResourcePanel,
   StatusCards,
   TracePanel,
   TrafficPanel,
@@ -19,6 +20,7 @@ export default function App() {
   const [available, setAvailable] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(new Date());
+  const [resourceKey, setResourceKey] = useState(0);
   const playingRef = useRef(false);
 
   useEffect(() => {
@@ -56,12 +58,19 @@ export default function App() {
     try {
       const state = await api.inject(id);
       setIncident(state);
+      setResourceKey((k) => k + 1); // 資源已被調度，刷新庫存
       // 事件時間點同步跳轉，讓地圖顏色與事件一致
       setView(await api.simSeek(state.event.timestamp));
     } finally {
       setBusy(false);
     }
   }, []);
+
+  const refreshIncident = useCallback(async () => {
+    if (!incident) return;
+    setIncident(await api.incidentState(incident.incident_id));
+    setResourceKey((k) => k + 1);
+  }, [incident]);
 
   return (
     <div className="app">
@@ -100,8 +109,10 @@ export default function App() {
             available={available}
             incident={incident}
             onInject={inject}
+            onRefresh={refreshIncident}
             busy={busy}
           />
+          <ResourcePanel refreshKey={resourceKey} />
         </div>
       </main>
 

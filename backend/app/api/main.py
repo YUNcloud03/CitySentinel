@@ -54,6 +54,18 @@ def health():
     return {"status": "ok", "segments": len(bundle.network), "incidents": list(bundle.incidents)}
 
 
+@app.get("/api/resources")
+def resources():
+    return [r.as_dict() for r in bundle.registry.list()]
+
+
+@app.post("/api/resources/reset")
+def reset_resources():
+    bundle.registry.reset()
+    coordinator._incident_allocations.clear()
+    return {"status": "reset", "resources": [r.as_dict() for r in bundle.registry.list()]}
+
+
 @app.get("/api/road-network")
 def road_network():
     return [seg.__dict__ | {"intersections": list(seg.intersections),
@@ -161,9 +173,11 @@ def decision_trace(incident_id: str):
     return {
         "incident_id": incident_id,
         "triggered_rules": state["triggered_rules"],
+        "rule_attribution": state.get("rule_attribution", {}),
         "trigger_details": state.get("trigger_details", []),
         "routing_result": state["routing_result"],
         "ete_result": state["ete_result"],
+        "dispatch": state.get("dispatch"),
         "sop_evidence": state["sop_evidence"],
         "decision_trace": state["decision_trace"],
     }
@@ -175,3 +189,33 @@ def incident_notifications(incident_id: str):
     if state is None:
         raise HTTPException(status_code=404, detail=f"事件 {incident_id} 尚未處理")
     return state["notifications"]
+
+
+class DispatchActionRequest(BaseModel):
+    op: str  # accept / reject / adjust
+    count: int | None = None
+    reason: str = ""
+    operator: str = "commander"
+
+
+@app.get("/api/incidents/{incident_id}/dispatch")
+def incident_dispatch(incident_id: str):
+    state = coordinator.incident_states.get(incident_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail=f"事件 {incident_id} 尚未處理")
+    return state.get("dispatch") or {"actions": [], "gaps": [], "has_shortfall": False}
+
+
+@app.post("/api/incidents/{incident_id}/dispatch/{action_id}")
+def dispatch_action(incident_id: str, action_id: str, req: DispatchActionRequest):
+    """管理者 Challenge 操作：接受 / 拒絕 / 調整調度動作。"""
+    try:
+        state = coordinator.dispatch_action(
+            incident_id, action_id, req.op,
+            count=req.count, reason=req.reason, operator=req.operator,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return state["dispatch"]

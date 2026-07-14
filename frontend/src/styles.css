@@ -146,6 +146,50 @@ summary { cursor: pointer; color: #7dd3fc; font-size: 12.5px; }
   text-transform: uppercase; font-size: 10.5px;
 }
 
+/* 資源庫存 */
+.panel h3 .mini {
+  float: right; font-size: 10.5px; padding: 2px 8px;
+}
+.chip.red { background: #450a0a; color: var(--red); }
+
+/* 規則歸因 */
+.attribution { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
+.attribution > div { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.attr-label {
+  font-size: 10.5px; padding: 1px 6px; border-radius: 4px; margin-right: 4px;
+}
+.attr-label.caused { background: #450a0a; color: #fca5a5; }
+.attr-label.calc { background: #052e16; color: #86efac; }
+.attr-label.context { background: #1e293b; color: var(--dim); }
+
+/* 調度動作 */
+.dispatch-action {
+  border: 1px solid var(--border); border-left: 3px solid var(--cyan);
+  border-radius: 7px; padding: 8px; margin: 6px 0; background: var(--panel-2);
+}
+.dispatch-action.status-shortfall { border-left-color: var(--red); }
+.dispatch-action.status-rejected { border-left-color: var(--dim); opacity: 0.7; }
+.dispatch-action.status-accepted { border-left-color: var(--green); }
+.dispatch-action.status-adjusted { border-left-color: var(--amber); }
+.da-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.da-title { font-weight: 600; font-size: 12px; flex: 1; }
+.da-status { font-size: 10.5px; padding: 1px 7px; border-radius: 10px; }
+.da-status.proposed { background: #1e293b; color: #93c5fd; }
+.da-status.accepted { background: #052e16; color: var(--green); }
+.da-status.adjusted { background: #3f2b05; color: var(--amber); }
+.da-status.rejected { background: #1e293b; color: var(--dim); }
+.da-status.shortfall { background: #450a0a; color: var(--red); }
+.da-detail { font-size: 11.5px; color: var(--dim); margin: 3px 0; }
+.da-assign { font-size: 11.5px; margin: 3px 0; }
+.da-escalation { font-size: 11.5px; color: var(--red); margin: 3px 0; }
+.da-challenge summary { font-size: 11px; }
+.da-override {
+  font-size: 11px; color: var(--amber); margin-top: 4px;
+  background: #1a1206; border-radius: 5px; padding: 4px 6px;
+}
+.da-actions { display: flex; gap: 6px; margin-top: 6px; }
+.da-actions button { font-size: 11px; padding: 3px 10px; }
+
 /* 底部 */
 footer { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .trace-flow { display: flex; gap: 0; overflow-x: auto; padding: 8px 0; }

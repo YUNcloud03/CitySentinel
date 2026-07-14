@@ -46,6 +46,12 @@ export interface IncidentState {
   trigger_details?: Alert[];
   routing_result: any;
   ete_result: any;
+  dispatch: any;
+  rule_attribution?: {
+    caused_by_incident: number[];
+    context_rules: number[];
+    calculation_rules: number[];
+  };
   sop_evidence: { rule_id: number; title: string; text: string }[];
   notifications: any;
   decision_trace: { step: string; at: string; detail: any }[];
@@ -68,6 +74,17 @@ async function get<T>(url: string): Promise<T> {
   return res.json();
 }
 
+export interface Resource {
+  resource_id: string;
+  resource_type: string;
+  label: string;
+  total_count: number;
+  available_count: number;
+  current_location: string;
+  eta_minutes: number;
+  status: string;
+}
+
 export const api = {
   simStart: (speed: number, start?: string) =>
     post<SimView>("/api/simulation/start", { speed, start_timestamp: start ?? null }),
@@ -79,4 +96,13 @@ export const api = {
   incidents: () => get<{ available: any[]; processed: string[] }>("/api/incidents"),
   whatIfNL: (question: string) => post<any>("/api/what-if/nl", { question }),
   sop: () => get<{ rule_id: number; title: string; text: string }[]>("/api/sop"),
+  resources: () => get<Resource[]>("/api/resources"),
+  resetResources: () => post<any>("/api/resources/reset"),
+  incidentState: (id: string) => get<IncidentState>(`/api/incidents/${id}`),
+  dispatchAction: (
+    incidentId: string,
+    actionId: string,
+    op: "accept" | "reject" | "adjust",
+    extra: { count?: number; reason?: string; operator?: string } = {}
+  ) => post<any>(`/api/incidents/${incidentId}/dispatch/${actionId}`, { op, ...extra }),
 };
