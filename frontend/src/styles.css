@@ -62,8 +62,21 @@ button.primary { background: #1d4ed8; border-color: #3b82f6; }
 .card.red .card-value { color: var(--red); }
 .card.purple .card-value { color: var(--purple); }
 
+/* 頁籤導航 */
+.page-nav { display: flex; gap: 4px; margin-left: 14px; }
+.page-nav button {
+  border-radius: 7px 7px 0 0; border-bottom: 2px solid transparent;
+  background: transparent; padding: 6px 14px; font-size: 13px;
+}
+.page-nav button.active {
+  color: #93c5fd; border-bottom-color: #3b82f6; background: var(--panel-2);
+}
+
 /* 主格線 */
-main { display: grid; grid-template-columns: 290px 1fr 360px; gap: 10px; flex: 1; }
+main { display: grid; gap: 10px; flex: 1; }
+.command-grid { grid-template-columns: 1fr 380px; }
+.monitor-grid { grid-template-columns: 300px 1fr 320px; }
+.logs-view { grid-template-columns: 1fr; }
 .col { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 
 .panel {
@@ -265,8 +278,40 @@ footer { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .actions { margin: 4px 0 0 18px; color: var(--dim); }
 .evidence.highlight { border-left: 3px solid var(--cyan); padding-left: 8px; }
 
+/* 趨勢圖 */
+.trend-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.trend-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 3px 0; border-top: 1px solid var(--border);
+}
+.trend-name {
+  width: 96px; font-size: 11.5px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.trend-value { font-size: 11.5px; font-weight: 600; margin-left: auto; }
+
+/* 系統紀錄 */
+.log-filters { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.log-list { max-height: 72vh; overflow-y: auto; }
+.log-entry {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 7px 4px; border-top: 1px solid var(--border);
+}
+.log-time { font-family: Consolas, monospace; font-size: 11px; color: var(--dim); width: 142px; flex-shrink: 0; }
+.log-cat {
+  font-size: 10.5px; padding: 1px 8px; border-radius: 10px;
+  flex-shrink: 0; border: 1px solid;
+}
+.cat-amber { color: var(--amber); border-color: var(--amber); }
+.cat-red { color: var(--red); border-color: var(--red); }
+.cat-cyan { color: var(--cyan); border-color: var(--cyan); }
+.cat-green { color: var(--green); border-color: var(--green); }
+.cat-purple { color: var(--purple); border-color: var(--purple); }
+.log-title { font-size: 12.5px; }
+.log-detail { font-size: 11.5px; margin-top: 1px; }
+
 @media (max-width: 1200px) {
-  main { grid-template-columns: 1fr; }
+  main, .command-grid, .monitor-grid { grid-template-columns: 1fr; }
   .cards { grid-template-columns: repeat(2, 1fr); }
   footer { grid-template-columns: 1fr; }
 }

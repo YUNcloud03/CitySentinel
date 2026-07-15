@@ -269,6 +269,98 @@ def llm_status():
     return {"provider": provider, "available": provider is not None}
 
 
+# ---- 系統紀錄（統一 log）與歷史趨勢 ----
+
+def _norm_ts(value: str) -> str:
+    """把 ISO（含 T）與一般格式統一為 'YYYY-MM-DD HH:MM:SS' 以利排序。"""
+    return value.replace("T", " ")[:19]
+
+
+@app.get("/api/logs")
+def system_logs():
+    """統一系統紀錄：監測預警、事件處理、人工覆寫、通報歷程、模擬紀錄。
+
+    以「真實系統時間」排序（新到舊）；監測預警另附模擬時間。
+    """
+    entries: list[dict] = []
+
+    for a in player.alert_log:
+        entries.append({
+            "at": a.get("logged_at", a["sim_time"]),
+            "sim_time": a["sim_time"],
+            "category": "監測預警",
+            "title": f"SOP {a['rule_id']}｜{a['entity_id']}",
+            "detail": "；".join(a["actions"]),
+        })
+
+    for st in coordinator.incident_states.values():
+        entries.append({
+            "at": _norm_ts(st["started_at"]),
+            "sim_time": st.get("as_of"),
+            "category": "事件處理",
+            "title": f"{st['incident_id']}｜{st['workflow_status']}",
+            "detail": f"觸發 SOP {st['triggered_rules']}"
+                      + (f"｜ETE {st['ete_result']['ete_minutes_display']} 分" if st.get("ete_result") else ""),
+        })
+        for t in st["decision_trace"]:
+            if t["step"] == "HUMAN_OVERRIDE":
+                d = t["detail"]
+                entries.append({
+                    "at": _norm_ts(t["at"]),
+                    "sim_time": None,
+                    "category": "人工覆寫",
+                    "title": f"{st['incident_id']}｜{d.get('action_id')}｜{d.get('op')}",
+                    "detail": f"{d.get('override_by')}：{d.get('override_reason') or '（未填理由）'}",
+                })
+
+    for n in bundle.notification_center.list():
+        for h in n["history"]:
+            entries.append({
+                "at": h["at"],
+                "sim_time": None,
+                "category": "通報",
+                "title": f"{n['notification_id']} → {h['status']}",
+                "detail": h["note"],
+            })
+
+    for r in simulation_runs:
+        entries.append({
+            "at": _norm_ts(r["created_at"]),
+            "sim_time": None,
+            "category": "模擬",
+            "title": f"{r['simulation_run_id']}｜{r['event_payload']['type']}",
+            "detail": f"{r['event_payload']['affected_segment']}｜觸發 SOP {r['triggered_rules']}",
+        })
+
+    entries.sort(key=lambda e: e["at"], reverse=True)
+    return entries
+
+
+@app.get("/api/history")
+def history(until: str | None = None):
+    """趨勢資料：各路段飽和度、各場站人數/漫遊率時序（供監測頁圖表）。"""
+    from ..data_loader import format_ts, parse_ts
+
+    limit = parse_ts(until) if until else None
+    traffic: dict[str, dict] = {}
+    for rec in bundle.traffic:
+        if limit and rec.timestamp > limit:
+            continue
+        traffic.setdefault(rec.segment_id, {"name": rec.road_name, "points": []})
+        traffic[rec.segment_id]["points"].append(
+            {"t": format_ts(rec.timestamp), "sat": rec.saturation_score, "speed": rec.avg_speed}
+        )
+    crowd: dict[str, dict] = {}
+    for rec in bundle.crowd:
+        if limit and rec.timestamp > limit:
+            continue
+        crowd.setdefault(rec.bs_id, {"name": rec.location_name, "points": []})
+        crowd[rec.bs_id]["points"].append(
+            {"t": format_ts(rec.timestamp), "users": rec.user_count, "roaming": rec.roaming_user_pct}
+        )
+    return {"traffic": traffic, "crowd": crowd}
+
+
 # ---- 16.6–16.7 決策鏈與通報 ----
 
 @app.get("/api/incidents/{incident_id}/decision-trace")

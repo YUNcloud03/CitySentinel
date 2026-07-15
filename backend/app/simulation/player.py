@@ -73,10 +73,13 @@ class SimulationPlayer:
         for alert in alerts:
             key = (format_ts(at), alert["rule_id"], alert["entity_id"])
             if key not in {(a["sim_time"], a["rule_id"], a["entity_id"]) for a in self.alert_log}:
+                from datetime import datetime as _dt
+
                 self.alert_log.append(
                     {"sim_time": format_ts(at), "rule_id": alert["rule_id"],
                      "entity_id": alert["entity_id"], "evidence": alert["evidence"],
-                     "actions": alert["actions"]}
+                     "actions": alert["actions"],
+                     "logged_at": _dt.now().strftime("%Y-%m-%d %H:%M:%S")}
                 )
 
         return {

@@ -3,20 +3,27 @@ import { api, type IncidentState, type SimView } from "./api";
 import MapView from "./MapView";
 import {
   AlertFeed,
-  CrowdPanel,
   CustomEventForm,
   IncidentPanel,
   NotificationLifecyclePanel,
-  ResourcePanel,
   StatusCards,
   TracePanel,
-  TrafficPanel,
   WhatIfPanel,
 } from "./components";
+import { LogsView, MonitorView } from "./views";
 
 const TICK_MS = 2500; // 前端節奏：2.5 秒推進一個資料時間點
 
+type Page = "command" | "monitor" | "logs";
+
+const PAGES: [Page, string][] = [
+  ["command", "指揮中心"],
+  ["monitor", "監測中心"],
+  ["logs", "系統紀錄"],
+];
+
 export default function App() {
+  const [page, setPage] = useState<Page>("command");
   const [view, setView] = useState<SimView | null>(null);
   const [incident, setIncident] = useState<IncidentState | null>(null);
   const [available, setAvailable] = useState<any[]>([]);
@@ -78,6 +85,13 @@ export default function App() {
     <div className="app">
       <header>
         <h1>城市應變 AI Command Center</h1>
+        <nav className="page-nav">
+          {PAGES.map(([id, label]) => (
+            <button key={id} className={page === id ? "active" : ""} onClick={() => setPage(id)}>
+              {label}
+            </button>
+          ))}
+        </nav>
         <div className="clock">
           <span>模擬時間 <b>{view?.sim_time ?? "--:--"}</b></span>
           <span className="dim">系統時間 {now.toLocaleTimeString("zh-TW", { hour12: false })}</span>
@@ -95,41 +109,41 @@ export default function App() {
         </div>
       </header>
 
-      <StatusCards view={view} incident={incident} />
+      {page === "command" && (
+        <>
+          <StatusCards view={view} incident={incident} />
+          <main className="command-grid">
+            <div className="col center">
+              <MapView view={view} incident={incident} />
+              <AlertFeed alerts={view?.active_alerts ?? []} />
+            </div>
+            <div className="col right">
+              <IncidentPanel
+                available={available}
+                incident={incident}
+                onInject={inject}
+                onRefresh={refreshIncident}
+                busy={busy}
+              />
+              <CustomEventForm
+                onInjected={(state) => {
+                  setIncident(state);
+                  setResourceKey((k) => k + 1);
+                  api.simSeek(state.event.timestamp).then(setView).catch(() => {});
+                }}
+              />
+              <NotificationLifecyclePanel refreshKey={resourceKey} />
+            </div>
+          </main>
+          <footer>
+            <TracePanel incident={incident} />
+            <WhatIfPanel />
+          </footer>
+        </>
+      )}
 
-      <main>
-        <div className="col left">
-          <TrafficPanel traffic={view?.traffic ?? {}} />
-          <CrowdPanel crowd={view?.crowd ?? {}} />
-        </div>
-        <div className="col center">
-          <MapView view={view} incident={incident} />
-          <AlertFeed alerts={view?.active_alerts ?? []} />
-        </div>
-        <div className="col right">
-          <IncidentPanel
-            available={available}
-            incident={incident}
-            onInject={inject}
-            onRefresh={refreshIncident}
-            busy={busy}
-          />
-          <CustomEventForm
-            onInjected={(state) => {
-              setIncident(state);
-              setResourceKey((k) => k + 1);
-              api.simSeek(state.event.timestamp).then(setView).catch(() => {});
-            }}
-          />
-          <NotificationLifecyclePanel refreshKey={resourceKey} />
-          <ResourcePanel refreshKey={resourceKey} />
-        </div>
-      </main>
-
-      <footer>
-        <TracePanel incident={incident} />
-        <WhatIfPanel />
-      </footer>
+      {page === "monitor" && <MonitorView view={view} resourceKey={resourceKey} />}
+      {page === "logs" && <LogsView />}
     </div>
   );
 }

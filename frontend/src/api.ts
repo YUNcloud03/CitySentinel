@@ -105,6 +105,9 @@ export const api = {
   customIncident: (payload: any) => post<IncidentState>("/api/incidents/custom", payload),
   aiSummary: (incidentId: string) => post<any>(`/api/incidents/${incidentId}/ai-summary`),
   llmStatus: () => get<{ provider: string | null; available: boolean }>("/api/llm/status"),
+  logs: () => get<any[]>("/api/logs"),
+  history: (until?: string) =>
+    get<any>(`/api/history${until ? `?until=${encodeURIComponent(until)}` : ""}`),
   dispatchAction: (
     incidentId: string,
     actionId: string,
