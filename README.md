@@ -43,6 +43,16 @@
   Guardrails：structured output schema 驗證、cited_rule_ids 必須是已觸發條款子集、
   編造的站點/路段 ID 一律拒絕、requires_human_approval 強制為 true、
   LLM 失敗一律 fallback 不中斷主流程、LLM 不可直接呼叫發布 API
+## Phase 6 進度（五頁資訊架構 + 民眾端 + 緊急彈窗）
+
+- ✅ **五頁 Dashboard**：指揮中心（維持原樣）｜監測中心｜紀錄與驗證｜顧問對話｜民眾端
+- ✅ **信心分數**：多源事件可信度（官方來源+車速異常+車道狀態+周邊人流），
+  確定性可解釋、附證據清單；僅供參考不參與 SOP 判定
+- ✅ **可驗證性資料**：GET /api/provenance（來源檔 SHA256、筆數、全部引擎門檻常數）
+- ✅ **顧問對話**：三層路由（What-if regex→LLM 解析 / SOP 條款查詢 / LLM 問答＋guardrail）
+- ✅ **緊急彈窗**：A 級壅塞、SOP 3/4 觸發時全域 message box，同實體同規則去重
+- ✅ **民眾端手機模擬**：PWS 風格疏散警報；依裝置語言自動顯示對應語言（可手動切換
+  中/英/日/韓）；依通報目標區域過濾（範圍外收不到）；通報「核准→發布」後即送達
 - 尚未做：WebSocket 推送（目前輪詢）、H3 區域風險層、AWS 部署
 
 ## 快速開始

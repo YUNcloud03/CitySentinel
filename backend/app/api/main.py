@@ -269,6 +269,124 @@ def llm_status():
     return {"provider": provider, "available": provider is not None}
 
 
+# ---- 顧問對話（三層路由：What-if → SOP 查詢 → LLM 問答） ----
+
+class AdvisorChatRequest(BaseModel):
+    question: str
+
+
+def _latest_incident_context() -> str:
+    states = list(coordinator.incident_states.values())
+    if not states:
+        return ""
+    st = states[-1]
+    lines = [
+        f"事件 {st['incident_id']}｜{st['event'].get('type')}｜{st['event'].get('location')}",
+        f"觸發 SOP：{st['triggered_rules']}",
+    ]
+    if st.get("routing_result") and st["routing_result"].get("primary_route"):
+        lines.append(f"主疏散：{st['routing_result']['primary_route']['name']}")
+    if st.get("ete_result"):
+        lines.append(f"ETE：{st['ete_result']['formula']}")
+    if st.get("confidence"):
+        lines.append(f"事件可信度：{st['confidence']['confidence_score']}（{st['confidence']['level']}）")
+    return "\n".join(lines)
+
+
+@app.post("/api/advisor/chat")
+def advisor_chat(req: AdvisorChatRequest):
+    q = req.question.strip()
+
+    # 第一層：What-if 假設分析（regex → LLM 解析，同一套 sandbox）
+    scenario = None
+    parsed_by = None
+    try:
+        scenario = parse_question(q)
+        parsed_by = "regex"
+    except ValueError:
+        if re.search(r"如果|假設|會怎樣|what.?if", q, re.IGNORECASE):
+            scenario = advisor.parse_what_if_with_llm(
+                q,
+                station_ids=sorted({r.bs_id for r in bundle.crowd}),
+                segment_ids=list(bundle.network),
+            )
+            if scenario:
+                parsed_by = f"llm:{get_provider()[0]}"
+    if scenario:
+        result = run_what_if(bundle, scenario)
+        new_rules = result["diff"]["newly_triggered_rules"]
+        answer = (
+            f"已在 Sandbox 執行假設分析（{result['as_of']} 時間切面，正式狀態未修改）。"
+            + (f"假設成立後將新觸發 SOP {'、'.join(map(str, new_rules))}。"
+               if new_rules else "假設成立後不會新觸發任何 SOP 條款。")
+        )
+        return {"kind": "whatif", "answer": answer, "parsed_by": parsed_by,
+                "whatif_result": result, "cited_rule_ids": result["sandbox"]["triggered_rules"]}
+
+    # 第二層：SOP 條款直接查詢（確定性）
+    m = re.search(r"(?:SOP|規則|第)\s*([1-7])\s*(?:條|$|[^0-9])", q, re.IGNORECASE)
+    if m and re.search(r"SOP|規則|條款|第.*條|內容|是什麼|規定", q, re.IGNORECASE):
+        rule = bundle.sop.get(int(m.group(1)))
+        return {"kind": "sop", "answer": f"第 {rule['rule_id']} 條「{rule['title']}」：\n{rule['text']}",
+                "cited_rule_ids": [rule["rule_id"]]}
+
+    # 第三層：LLM 問答（guardrail：只引用 SOP 1-7；失敗走能力說明）
+    llm_answer = advisor.answer_question(q, bundle.sop.rules, _latest_incident_context())
+    if llm_answer:
+        return {"kind": "chat", **llm_answer}
+    return {
+        "kind": "help",
+        "answer": "我可以協助：(1) What-if 假設分析，例如「如果 BL17 人數增加到 40000 人會怎樣？」"
+                  "(2) SOP 條款查詢，例如「SOP 2 的內容是什麼」"
+                  "(3) 當前事件諮詢（需 LLM 可用）。",
+        "cited_rule_ids": [],
+    }
+
+
+# ---- 信心分數與資料佐證（可驗證性） ----
+
+@app.get("/api/confidence")
+def confidence_list():
+    return [
+        {"incident_id": st["incident_id"], "as_of": st["as_of"],
+         "event_type": st["event"].get("type"), **st["confidence"]}
+        for st in coordinator.incident_states.values()
+        if st.get("confidence")
+    ]
+
+
+@app.get("/api/provenance")
+def provenance():
+    """資料佐證：來源檔 SHA256、筆數、引擎門檻——讓評審可重算每個數字。"""
+    import hashlib
+
+    from ..config import ROAD_NETWORK_JSON
+    from ..engines import confidence as ce
+    from ..engines import ete_calculator as ete
+    from ..engines import routing_engine as re_
+
+    road_hash = hashlib.sha256(ROAD_NETWORK_JSON.read_bytes()).hexdigest()
+    return {
+        "data_sources": [
+            {"file": "road_network_geometry.json", "records": len(bundle.network),
+             "sha256": road_hash, "note": "authoritative（官方命題資料夾版）"},
+            {"file": "city_traffic_flow.csv", "records": len(bundle.traffic)},
+            {"file": "signaling_crowd_density.csv", "records": len(bundle.crowd)},
+            {"file": "emergency_traffic_sop.txt", "records": len(bundle.sop.rules)},
+            {"file": "live_incidents.json", "records": len(bundle.incidents)},
+        ],
+        "engine_constants": {
+            "壅塞分級": {"B級": 0.85, "A級": 0.95},
+            "Routing": {"最低容量_vph": re_.MIN_CAPACITY_VPH, "壅塞維持門檻": re_.CONGESTED_THRESHOLD},
+            "ETE": {"base_clearance": ete.BASE_CLEARANCE, "懲罰基準": ete.PENALTY_BASELINE,
+                    "懲罰係數": ete.PENALTY_FACTOR},
+            "信心分數": {"車速崩跌_kmh": ce.SPEED_COLLAPSE_KMH,
+                        "人流異常成長率": ce.CROWD_ANOMALY_GROWTH},
+        },
+        "note": "所有判定與計算皆由確定性引擎執行，可依上述門檻與原始資料重算驗證。",
+    }
+
+
 # ---- 系統紀錄（統一 log）與歷史趨勢 ----
 
 def _norm_ts(value: str) -> str:

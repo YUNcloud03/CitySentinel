@@ -10,16 +10,18 @@ import {
   TracePanel,
   WhatIfPanel,
 } from "./components";
-import { LogsView, MonitorView } from "./views";
+import { AdvisorChatView, CitizenView, EmergencyModal, MonitorView, VerifyView } from "./views";
 
 const TICK_MS = 2500; // 前端節奏：2.5 秒推進一個資料時間點
 
-type Page = "command" | "monitor" | "logs";
+type Page = "command" | "monitor" | "verify" | "advisor" | "citizen";
 
 const PAGES: [Page, string][] = [
   ["command", "指揮中心"],
   ["monitor", "監測中心"],
-  ["logs", "系統紀錄"],
+  ["verify", "紀錄與驗證"],
+  ["advisor", "顧問對話"],
+  ["citizen", "民眾端"],
 ];
 
 export default function App() {
@@ -143,7 +145,11 @@ export default function App() {
       )}
 
       {page === "monitor" && <MonitorView view={view} resourceKey={resourceKey} />}
-      {page === "logs" && <LogsView />}
+      {page === "verify" && <VerifyView refreshKey={resourceKey} />}
+      {page === "advisor" && <AdvisorChatView />}
+      {page === "citizen" && <CitizenView />}
+
+      <EmergencyModal view={view} />
     </div>
   );
 }

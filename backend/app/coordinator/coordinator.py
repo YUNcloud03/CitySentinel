@@ -22,6 +22,7 @@ from ..data_loader import (
     parse_ts,
     traffic_snapshot,
 )
+from ..engines import confidence as confidence_engine
 from ..engines import ete_calculator, routing_engine, rule_engine
 from ..notifications_center import NotificationCenter
 from ..resources import dispatch_engine
@@ -130,6 +131,16 @@ class Coordinator:
             step("RULE_EVALUATED", {
                 "caused_by_incident": caused_by_incident,
                 "context_rules": context_rules,
+            })
+
+            # CONFIDENCE_ASSESSED：多源可信度（僅供參考，不參與判定）
+            state["confidence"] = confidence_engine.assess_confidence(
+                incident, traffic_snap, crowd_snap, self.bundle.network
+            )
+            step("CONFIDENCE_ASSESSED", {
+                "score": state["confidence"]["confidence_score"],
+                "level": state["confidence"]["level"],
+                "signals": len(state["confidence"]["evidence"]),
             })
 
             # ROUTE_PLANNED（SOP 2 觸發才需要）

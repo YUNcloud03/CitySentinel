@@ -24,6 +24,20 @@ RULE_NAMES = {
 }
 
 
+def _coerce_int_list(v):
+    """寬容解析：LLM 偶爾回 "SOP 2" 這類字串，抽出數字；抽不出的保留原值讓驗證失敗。"""
+    if not isinstance(v, list):
+        return v
+    out = []
+    for item in v:
+        if isinstance(item, str):
+            m = re.search(r"\d+", item)
+            out.append(int(m.group()) if m else item)
+        else:
+            out.append(item)
+    return out
+
+
 class DecisionSummary(BaseModel):
     summary: str = Field(description="給交控中心指揮官的事件摘要，150 字內，繁體中文")
     cited_rule_ids: list[int] = Field(description="引用的 SOP 條款編號（純整數，如 2），只能來自提供的清單")
@@ -31,20 +45,7 @@ class DecisionSummary(BaseModel):
     assumptions: list[str] = Field(default_factory=list, description="摘要依據的假設")
     requires_human_approval: bool = True
 
-    @field_validator("cited_rule_ids", mode="before")
-    @classmethod
-    def _coerce_rule_ids(cls, v):
-        """寬容解析：LLM 偶爾回 "SOP 2" 這類字串，抽出數字；抽不出的保留原值讓驗證失敗。"""
-        if not isinstance(v, list):
-            return v
-        out = []
-        for item in v:
-            if isinstance(item, str):
-                m = re.search(r"\d+", item)
-                out.append(int(m.group()) if m else item)
-            else:
-                out.append(item)
-        return out
+    _coerce = field_validator("cited_rule_ids", mode="before")(_coerce_int_list)
 
 
 _SUMMARY_SYSTEM = """你是交控中心的 AI 參謀。根據「已由確定性引擎計算完成」的決策資料，
@@ -152,6 +153,45 @@ def generate_decision_summary(state: dict) -> dict:
         "llm_generated": True,
         "provider": provider,
     }
+
+
+# ---- 顧問對話：一般問答（SOP / 現況說明） ----
+
+class AdvisorAnswer(BaseModel):
+    answer: str = Field(description="給指揮官的回答，繁體中文，200 字內")
+    cited_rule_ids: list[int] = Field(
+        default_factory=list, description="回答引用的 SOP 條款編號（1-7 的整數）"
+    )
+
+    _coerce = field_validator("cited_rule_ids", mode="before")(_coerce_int_list)
+
+
+_CHAT_SYSTEM = """你是交控中心的 AI 顧問。回答指揮官關於交通應變 SOP 與當前事件的問題。
+嚴格遵守：
+1. 只能依據提供的 SOP 原文與事件資料回答，禁止編造條款、道路、場站或數值。
+2. 引用條款時在 cited_rule_ids 列出條款編號（1-7）。
+3. 無法從提供資料回答時，明確說「提供的資料中沒有此資訊」。
+4. 你沒有任何執行權限：不能發布通報、不能調度資源，只能提供諮詢。
+以繁體中文回答。"""
+
+
+def answer_question(question: str, sop_rules: dict[int, dict], incident_context: str) -> dict | None:
+    """LLM 顧問問答；失敗回 None（呼叫端走確定性 fallback）。"""
+    sop_text = "\n\n".join(
+        f"第 {r['rule_id']} 條 {r['title']}\n{r['text']}" for r in sop_rules.values()
+    )
+    result = llm_client.structured_completion(
+        _CHAT_SYSTEM,
+        f"SOP 原文：\n{sop_text}\n\n當前事件狀態：\n{incident_context or '（目前無進行中事件）'}\n\n指揮官問題：{question}",
+        AdvisorAnswer,
+    )
+    if result is None:
+        return None
+    # Guardrail：引用只允許 1-7
+    if not set(result.cited_rule_ids) <= set(range(1, 8)):
+        return None
+    provider, _ = llm_client.get_provider()
+    return {**result.model_dump(), "llm_generated": True, "provider": provider}
 
 
 # ---- What-if 自然語言解析（LLM 版，regex 解析失敗時的第二層） ----

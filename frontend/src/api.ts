@@ -108,6 +108,9 @@ export const api = {
   logs: () => get<any[]>("/api/logs"),
   history: (until?: string) =>
     get<any>(`/api/history${until ? `?until=${encodeURIComponent(until)}` : ""}`),
+  advisorChat: (question: string) => post<any>("/api/advisor/chat", { question }),
+  confidence: () => get<any[]>("/api/confidence"),
+  provenance: () => get<any>("/api/provenance"),
   dispatchAction: (
     incidentId: string,
     actionId: string,
