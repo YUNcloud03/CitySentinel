@@ -418,6 +418,8 @@ footer { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   padding: 10px 16px; font-size: 15px;
 }
 .em-body { padding: 14px 16px; }
+.em-summary { margin: 10px 0; }
+.em-summary p { margin: 6px 0 0; font-size: 12.5px; line-height: 1.65; }
 .em-entity { margin-left: 6px; }
 .em-body ul { margin: 8px 0 0 18px; font-size: 12.5px; }
 .em-body .mono { margin-top: 8px; }

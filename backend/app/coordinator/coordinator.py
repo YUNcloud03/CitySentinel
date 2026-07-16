@@ -215,8 +215,15 @@ class Coordinator:
             notification = self.bundle.notification_center.create_from_incident(state)
             state["notification_id"] = notification["notification_id"]
             step("CONTENT_GENERATED", {
-                "channels": list(state["notifications"].keys()),
                 "notification_id": notification["notification_id"],
+                "cms_source": (state["notifications"].get("cms_meta") or {}).get("source"),
+                "messages_source": (state["notifications"].get("messages_meta") or {}).get("source"),
+                "guardrail": [
+                    m["guardrail_rejected"]
+                    for m in (state["notifications"].get("cms_meta"),
+                              state["notifications"].get("messages_meta"))
+                    if m and m.get("guardrail_rejected")
+                ] or None,
             })
 
             # PUBLISHED：僅代表結果可供 Dashboard 讀取；
@@ -318,36 +325,23 @@ class Coordinator:
     # ---- 內部 ----
 
     def _generate_notifications(self, state, incident, at, crowd_triggers) -> dict:
-        result: dict = {}
+        """通報內容：LLM 生成（官方要求），必含 token 驗證把關，模板保底。"""
+        from ..llm import generator
+
         affected_id = incident.get("affected_segment", "")
         if not affected_id.startswith("RD_"):
             affected_id = incident.get("affected_road", "")
         affected_seg = self.bundle.network.get(affected_id)
         affected_name = affected_seg.name if affected_seg else incident.get("location", "受影響區域")
-        ete_display = state["ete_result"]["ete_minutes_display"] if state["ete_result"] else 0
 
-        primary = (state.get("routing_result") or {}).get("primary_route")
-        primary_name = primary["name"] if primary else None
-
-        # CMS
-        cms_lines = []
-        if 2 in state["triggered_rules"]:
-            cms_lines.append(notifications.cms_reroute_message(affected_name, primary_name, ete_display))
-        if 5 in state["triggered_rules"]:
-            cms_lines.append(notifications.cms_signal_failure_note(affected_name))
-        if cms_lines:
-            result["cms"] = " / ".join(cms_lines)
-
-        # 多語（SOP 6：任一基地台漫遊率 >= 30% 時必做多語；否則仍附 zh/en）
-        roaming_triggers = [t for t in crowd_triggers if t["rule_id"] == 6]
-        msgs = notifications.multilingual_reroute(
-            affected_name,
-            notifications.ROAD_NAME_EN.get(affected_id, affected_name),
-            primary_name,
-            notifications.ROAD_NAME_EN.get(primary["segment_id"], primary_name) if primary else None,
-            ete_display,
-            at,
+        content = generator.build_notification_content(
+            state, incident, at, affected_id, affected_name
         )
+        msgs = content.pop("_full_messages")
+        result = content
+
+        # SOP 6：任一基地台漫遊率 >= 30% 時必做多語；否則仍附 zh/en
+        roaming_triggers = [t for t in crowd_triggers if t["rule_id"] == 6]
         result["multilingual_required"] = bool(roaming_triggers)
         result["roaming_evidence"] = [t["evidence"] for t in roaming_triggers]
         result["messages"] = msgs if roaming_triggers else {k: msgs[k] for k in ("zh", "en")}

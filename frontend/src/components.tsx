@@ -419,7 +419,20 @@ function IncidentDetail({ incident, onRefresh }: { incident: IncidentState; onRe
 
       {noti && (
         <>
-          <h4>通報內容</h4>
+          <h4>
+            通報內容
+            {noti.messages_meta && (
+              <span className={`chip ${noti.messages_meta.source?.startsWith("llm") ? "green" : "amber"}`}>
+                {noti.messages_meta.source?.startsWith("llm")
+                  ? `LLM 生成（${noti.messages_meta.source.slice(4)}）` : "模板"}
+              </span>
+            )}
+          </h4>
+          {(noti.cms_meta?.guardrail_rejected || noti.messages_meta?.guardrail_rejected) && (
+            <div className="warn small">
+              ⚠ {noti.cms_meta?.guardrail_rejected ?? noti.messages_meta?.guardrail_rejected}
+            </div>
+          )}
           {noti.cms && <div className="cms">CMS：{noti.cms}</div>}
           {noti.messages &&
             Object.entries(noti.messages as Record<string, string>).map(([lang, msg]) => (

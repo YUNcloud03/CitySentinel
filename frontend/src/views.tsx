@@ -104,9 +104,9 @@ export function MonitorView({ view, resourceKey }: { view: SimView | null; resou
 
 // ---- 系統紀錄 ----
 
-const LOG_CATEGORIES = ["全部", "監測預警", "事件處理", "人工覆寫", "通報", "模擬"];
+const LOG_CATEGORIES = ["全部", "監測預警", "事件處理", "人工覆寫", "通報", "模擬", "LLM"];
 const CATEGORY_COLORS: Record<string, string> = {
-  監測預警: "amber", 事件處理: "red", 人工覆寫: "cyan", 通報: "green", 模擬: "purple",
+  監測預警: "amber", 事件處理: "red", 人工覆寫: "cyan", 通報: "green", 模擬: "purple", LLM: "cyan",
 };
 
 function LogListPanel() {
@@ -434,6 +434,7 @@ function isEmergency(a: Alert): boolean {
 export function EmergencyModal({ view }: { view: SimView | null }) {
   const seen = useRef<Set<string>>(new Set());
   const [queue, setQueue] = useState<Alert[]>([]);
+  const [summary, setSummary] = useState<{ summary: string; source: string } | null>(null);
 
   useEffect(() => {
     const alerts = view?.active_alerts ?? [];
@@ -451,6 +452,23 @@ export function EmergencyModal({ view }: { view: SimView | null }) {
   }, [view?.active_alerts]);
 
   const current = queue[0];
+  const currentKey = current ? `${current.rule_id}|${current.entity_id}` : null;
+
+  // 官方要求：彈窗分析摘要由 LLM 自動生成（無需人工介入）
+  useEffect(() => {
+    setSummary(null);
+    if (!current) return;
+    let cancelled = false;
+    api.alertSummary({
+      rule_id: current.rule_id,
+      entity_id: current.entity_id,
+      sim_time: (current.evidence as any)?.timestamp ?? view?.sim_time ?? null,
+      evidence: current.evidence,
+      actions: current.actions,
+    }).then((s) => { if (!cancelled) setSummary(s); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [currentKey]);
+
   if (!current) return null;
   const ev = current.evidence as any;
 
@@ -461,7 +479,22 @@ export function EmergencyModal({ view }: { view: SimView | null }) {
         <div className="em-body">
           <RuleBadge id={current.rule_id} />
           <b className="em-entity">{current.entity_id}</b>
-          <div className="mono small">{JSON.stringify(ev, null, 1)}</div>
+          <div className="em-summary">
+            {summary ? (
+              <>
+                <span className={`chip ${summary.source.startsWith("llm") ? "green" : "amber"}`}>
+                  {summary.source.startsWith("llm") ? `AI 分析（${summary.source.slice(4)}）` : "模板摘要"}
+                </span>
+                <p>{summary.summary}</p>
+              </>
+            ) : (
+              <p className="dim">AI 分析摘要生成中…</p>
+            )}
+          </div>
+          <details>
+            <summary className="dim small">證據數值</summary>
+            <div className="mono small">{JSON.stringify(ev, null, 1)}</div>
+          </details>
           <ul>{current.actions.map((a, i) => <li key={i}>{a}</li>)}</ul>
         </div>
         <div className="em-footer">

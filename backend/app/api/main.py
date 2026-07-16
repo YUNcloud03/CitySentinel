@@ -14,8 +14,8 @@ from pydantic import BaseModel, Field, field_validator
 from ..coordinator.coordinator import Coordinator, DataBundle
 from ..coordinator.whatif import run_what_if
 from ..coordinator.whatif_nl import parse_question
-from ..llm import advisor
-from ..llm.client import get_provider
+from ..llm import advisor, generator
+from ..llm.client import CALL_LOG, get_provider
 from ..simulation.player import SimulationPlayer
 
 app = FastAPI(title="城市應變分析 AI Command Center", version="0.1.0")
@@ -269,6 +269,27 @@ def llm_status():
     return {"provider": provider, "available": provider is not None}
 
 
+# ---- 預警摘要（官方：彈窗摘要由 LLM 生成；快取避免重複呼叫） ----
+
+class AlertSummaryRequest(BaseModel):
+    rule_id: int
+    entity_id: str
+    sim_time: str | None = None
+    evidence: dict = {}
+    actions: list[str] = []
+
+
+_alert_summary_cache: dict[str, dict] = {}
+
+
+@app.post("/api/alerts/summary")
+def alert_summary(req: AlertSummaryRequest):
+    key = f"{req.rule_id}|{req.entity_id}|{req.sim_time}"
+    if key not in _alert_summary_cache:
+        _alert_summary_cache[key] = generator.generate_alert_summary(req.model_dump())
+    return _alert_summary_cache[key]
+
+
 # ---- 顧問對話（三層路由：What-if → SOP 查詢 → LLM 問答） ----
 
 class AdvisorChatRequest(BaseModel):
@@ -448,6 +469,16 @@ def system_logs():
             "category": "模擬",
             "title": f"{r['simulation_run_id']}｜{r['event_payload']['type']}",
             "detail": f"{r['event_payload']['affected_segment']}｜觸發 SOP {r['triggered_rules']}",
+        })
+
+    # LLM 呼叫留痕（稽核：哪次生成用了 LLM、延遲、成敗）
+    for c in CALL_LOG:
+        entries.append({
+            "at": c["at"],
+            "sim_time": None,
+            "category": "LLM",
+            "title": f"{c['purpose']}｜{c['provider']}/{c['model']}｜{'成功' if c['ok'] else '失敗'}",
+            "detail": f"延遲 {c['latency_ms']} ms" + (f"｜{c['note']}" if c.get("note") else ""),
         })
 
     entries.sort(key=lambda e: e["at"], reverse=True)

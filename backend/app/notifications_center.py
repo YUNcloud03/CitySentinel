@@ -67,6 +67,10 @@ class NotificationCenter:
             "cms": noti.get("cms"),
             "messages": noti.get("messages", {}),
             "multilingual_required": noti.get("multilingual_required", False),
+            "generated_by": {
+                "cms": (noti.get("cms_meta") or {}).get("source"),
+                "messages": (noti.get("messages_meta") or {}).get("source"),
+            },
             "status": "READY_FOR_APPROVAL",  # 生成即草稿完成，待核准
             "deliveries": None,
             "created_at": _now(),
