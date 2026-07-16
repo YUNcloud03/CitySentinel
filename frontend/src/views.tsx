@@ -250,11 +250,12 @@ export function AdvisorChatView() {
 
   const ask = async (q: string) => {
     if (!q.trim() || busy) return;
+    const history = messages.slice(1).map((m) => ({ role: m.role, text: m.text }));
     setMessages((m) => [...m, { role: "user", text: q }]);
     setInput("");
     setBusy(true);
     try {
-      const res = await api.advisorChat(q);
+      const res = await api.advisorChat(q, history);
       setMessages((m) => [...m, { role: "advisor", text: res.answer, meta: res }]);
     } catch (e: any) {
       setMessages((m) => [...m, { role: "advisor", text: `查詢失敗：${e.message}` }]);
@@ -271,6 +272,20 @@ export function AdvisorChatView() {
           {messages.map((m, i) => (
             <div className={`chat-msg ${m.role}`} key={i}>
               <div className="chat-bubble">
+                {m.meta?.tool_trace?.length > 0 && (
+                  <div className="agent-trace">
+                    <div className="agent-trace-head">
+                      Agent 自主呼叫了 {m.meta.tool_trace.length} 個工具
+                    </div>
+                    {m.meta.tool_trace.map((t: any, j: number) => (
+                      <div className="agent-tool" key={j}>
+                        <span className="tool-name">🔧 {t.tool}</span>
+                        <span className="tool-args mono">{JSON.stringify(t.args)}</span>
+                        <div className="tool-result dim">→ {t.summary}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <div className="chat-text">{m.text}</div>
                 {m.meta?.cited_rule_ids?.length > 0 && (
                   <div className="chat-cites">
@@ -285,7 +300,11 @@ export function AdvisorChatView() {
                   </div>
                 )}
                 {m.meta?.provider && (
-                  <div className="dim small">LLM：{m.meta.provider}</div>
+                  <div className="dim small">
+                    {m.meta.kind === "agent"
+                      ? `Agent 模式（${m.meta.provider}）｜工具由 LLM 自主選擇，僅唯讀/sandbox`
+                      : `LLM：${m.meta.provider}`}
+                  </div>
                 )}
               </div>
             </div>

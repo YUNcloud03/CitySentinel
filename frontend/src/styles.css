@@ -339,6 +339,18 @@ footer { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .chat-cites { margin-top: 6px; }
 .chat-whatif { margin-top: 6px; }
 
+/* Agent 工具軌跡 */
+.agent-trace {
+  border-left: 3px solid var(--cyan); border-radius: 4px;
+  background: rgba(34, 211, 238, 0.06);
+  padding: 6px 10px; margin-bottom: 8px;
+}
+.agent-trace-head { font-size: 11px; color: var(--cyan); margin-bottom: 4px; }
+.agent-tool { padding: 3px 0; border-top: 1px dashed var(--border); }
+.tool-name { font-size: 11.5px; font-weight: 600; margin-right: 6px; }
+.tool-args { font-size: 10.5px; color: var(--dim); word-break: break-all; }
+.tool-result { font-size: 11px; margin-top: 1px; }
+
 /* 民眾端手機 */
 .citizen-view { grid-template-columns: 340px 380px; justify-content: center; align-items: start; }
 .citizen-controls label {

@@ -108,7 +108,8 @@ export const api = {
   logs: () => get<any[]>("/api/logs"),
   history: (until?: string) =>
     get<any>(`/api/history${until ? `?until=${encodeURIComponent(until)}` : ""}`),
-  advisorChat: (question: string) => post<any>("/api/advisor/chat", { question }),
+  advisorChat: (question: string, history: { role: string; text: string }[] = []) =>
+    post<any>("/api/advisor/chat", { question, history }),
   alertSummary: (alert: { rule_id: number; entity_id: string; sim_time?: string | null; evidence?: any; actions?: string[] }) =>
     post<{ summary: string; source: string }>("/api/alerts/summary", alert),
   confidence: () => get<any[]>("/api/confidence"),

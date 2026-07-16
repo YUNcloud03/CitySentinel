@@ -15,6 +15,7 @@ from ..coordinator.coordinator import Coordinator, DataBundle
 from ..coordinator.whatif import run_what_if
 from ..coordinator.whatif_nl import parse_question
 from ..llm import advisor, generator
+from ..llm.agent import AdvisorAgent
 from ..llm.client import CALL_LOG, get_provider
 from ..simulation.player import SimulationPlayer
 
@@ -29,6 +30,7 @@ app.add_middleware(
 bundle = DataBundle()
 coordinator = Coordinator(bundle)
 player = SimulationPlayer(bundle)
+advisor_agent = AdvisorAgent(bundle, coordinator, player)
 
 
 class SimulationStartRequest(BaseModel):
@@ -294,6 +296,7 @@ def alert_summary(req: AlertSummaryRequest):
 
 class AdvisorChatRequest(BaseModel):
     question: str
+    history: list[dict] = []
 
 
 def _latest_incident_context() -> str:
@@ -318,6 +321,16 @@ def _latest_incident_context() -> str:
 def advisor_chat(req: AdvisorChatRequest):
     q = req.question.strip()
 
+    # 主路徑：tool-calling agent——LLM 自主決定呼叫哪些唯讀工具後回答。
+    # LLM 不可用或 agent 失敗時，退回下方確定性路由（Demo 永不死）。
+    try:
+        agent_result = advisor_agent.run(q, req.history)
+        if agent_result.get("available"):
+            return {"kind": "agent", **{k: v for k, v in agent_result.items() if k != "available"}}
+    except Exception:  # noqa: BLE001 - agent 任何失敗都走確定性 fallback
+        pass
+
+    # ---- 以下為確定性 fallback 路由 ----
     # 第一層：What-if 假設分析（regex → LLM 解析，同一套 sandbox）
     scenario = None
     parsed_by = None

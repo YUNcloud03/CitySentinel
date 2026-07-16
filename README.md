@@ -62,6 +62,19 @@
   出現在每一語言，缺一即整包退回確定性模板；生成來源（llm:provider / template）
   全程標注於 UI 與決策鏈
 - ✅ **LLM 呼叫留痕**：用途/模型/延遲/成敗記入系統紀錄（LLM 分類），補稽核鏈
+## Phase 8 進度（顧問對話升級 tool-calling agent）
+
+- ✅ **真正的 LLM agent（諮詢層）**：LLM 在迴圈中自主決定呼叫哪些工具、參數、
+  何時停止——`get_sop / get_incident / run_what_if / get_traffic / get_crowd /
+  get_resources / get_confidence` 七個工具
+- ✅ **物理性安全邊界**：工具允許清單只有唯讀查詢與 What-if sandbox，
+  發布/調度/核准的工具不存在；迴圈上限 5 輪；引用條款由工具軌跡推導，
+  不信任 LLM 自報
+- ✅ **工具軌跡全程可視**：對話中顯示 agent 每一步呼叫（工具、參數、結果摘要），
+  每步 LLM 呼叫留痕系統紀錄
+- ✅ 雙 provider（Anthropic tool use / OpenAI function calling）；LLM 不可用時
+  退回確定性路由
+- 架構定位：**決策層＝確定性引擎（LLM 不可觸碰）；諮詢層＝LLM agent（唯讀）**
 - 尚未做：WebSocket 推送（目前輪詢）、H3 區域風險層、AWS 部署
 
 ## 快速開始
