@@ -464,6 +464,24 @@ def system_logs():
                     "title": f"{st['incident_id']}｜{d.get('action_id')}｜{d.get('op')}",
                     "detail": f"{d.get('override_by')}：{d.get('override_reason') or '（未填理由）'}",
                 })
+            elif t["step"] == "DISPATCH_PREEMPTED":
+                d = t["detail"]
+                entries.append({
+                    "at": _norm_ts(t["at"]),
+                    "sim_time": None,
+                    "category": "人工覆寫",
+                    "title": f"{st['incident_id']}｜{d.get('action_id')}｜遭抽調",
+                    "detail": f"被 {d.get('pulled_by')} 抽調 {d.get('count')} 單位（{d.get('operator')} 核准）",
+                })
+            elif t["step"] == "RESOURCE_REBALANCED":
+                d = t["detail"]
+                entries.append({
+                    "at": _norm_ts(t["at"]),
+                    "sim_time": None,
+                    "category": "事件處理",
+                    "title": f"{st['incident_id']}｜{d.get('action_id')}｜資源回填",
+                    "detail": f"回填 {d.get('refilled')} 單位，剩餘缺口 {d.get('remaining_gap')}",
+                })
 
     for n in bundle.notification_center.list():
         for h in n["history"]:
@@ -552,10 +570,12 @@ def incident_notifications(incident_id: str):
 
 
 class DispatchActionRequest(BaseModel):
-    op: str  # accept / reject / adjust
+    op: str  # accept / reject / adjust / preempt
     count: int | None = None
     reason: str = ""
     operator: str = "commander"
+    source_incident_id: str | None = None  # preempt 用：抽調來源
+    source_action_id: str | None = None
 
 
 @app.get("/api/incidents/{incident_id}/dispatch")
@@ -568,12 +588,21 @@ def incident_dispatch(incident_id: str):
 
 @app.post("/api/incidents/{incident_id}/dispatch/{action_id}")
 def dispatch_action(incident_id: str, action_id: str, req: DispatchActionRequest):
-    """管理者 Challenge 操作：接受 / 拒絕 / 調整調度動作。"""
+    """管理者 Challenge 操作：接受 / 拒絕 / 調整 / 優先權抽調。"""
     try:
-        state = coordinator.dispatch_action(
-            incident_id, action_id, req.op,
-            count=req.count, reason=req.reason, operator=req.operator,
-        )
+        if req.op == "preempt":
+            if not (req.source_incident_id and req.source_action_id and req.count):
+                raise ValueError("preempt 需提供 source_incident_id、source_action_id、count")
+            state = coordinator.preempt(
+                incident_id, action_id,
+                req.source_incident_id, req.source_action_id, req.count,
+                reason=req.reason, operator=req.operator,
+            )
+        else:
+            state = coordinator.dispatch_action(
+                incident_id, action_id, req.op,
+                count=req.count, reason=req.reason, operator=req.operator,
+            )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

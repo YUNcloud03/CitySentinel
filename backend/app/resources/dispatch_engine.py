@@ -15,7 +15,10 @@ from __future__ import annotations
 from ..data_loader import RoadSegment
 from . import registry as reg
 
-POLICY_SOURCE = "Coordinator Resource Policy v1.0"
+POLICY_SOURCE = "Coordinator Resource Policy v1.1"
+
+# 事件嚴重度 → 調度優先級（數字大者優先；搶佔只允許「高搶低」）
+SEVERITY_RANK = {"Critical": 3, "High": 2, "Medium": 1, "Low": 0}
 
 
 def build_requirements(
@@ -81,6 +84,7 @@ def plan_dispatch(
     registry: reg.ResourceRegistry,
     requirements: list[dict],
     snapshot_id: str,
+    severity: str = "Medium",
 ) -> dict:
     """依需求向 registry 配置，產生帶證據包的動作清單。
 
@@ -125,6 +129,8 @@ def plan_dispatch(
 
     return {
         "snapshot_id": snapshot_id,
+        "severity": severity,
+        "priority": SEVERITY_RANK.get(severity, 0),
         "actions": actions,
         "gaps": gaps,
         "has_shortfall": bool(gaps),

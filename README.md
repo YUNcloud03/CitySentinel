@@ -75,6 +75,16 @@
 - ✅ 雙 provider（Anthropic tool use / OpenAI function calling）；LLM 不可用時
   退回確定性路由
 - 架構定位：**決策層＝確定性引擎（LLM 不可觸碰）；諮詢層＝LLM agent（唯讀）**
+## Phase 9 進度（調度彈性：優先權 + 搶佔 + 回填）
+
+- ✅ **優先權感知**：每筆調度帶事件嚴重度優先級（Critical>High>Medium>Low）
+- ✅ **抽調建議（搶佔）**：資源缺口時自動掃描「較低優先事件」占用的同類資源，
+  提出可抽調來源——僅建議，指揮官一鍵核准後執行；嚴格「高搶低」，同級禁止
+- ✅ **雙邊稽核**：抽調在來源事件記 DISPATCH_PREEMPTED、目標事件記
+  HUMAN_OVERRIDE(op=preempt)，庫存守恆可驗證
+- ✅ **釋出回填（再規劃）**：拒絕/調降/重新研判降級釋出的資源，自動依優先權
+  回填其他事件缺口（RESOURCE_REBALANCED 入決策鏈，回填後仍待人工核准）
+- ✅ 預設警力庫存調為 12（8+4），三起事件併發即可 Demo 資源競爭
 - 尚未做：WebSocket 推送（目前輪詢）、H3 區域風險層、AWS 部署
 
 ## 快速開始

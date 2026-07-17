@@ -192,19 +192,29 @@ class Coordinator:
             )
             if requirements:
                 dispatch = dispatch_engine.plan_dispatch(
-                    self.bundle.registry, requirements, snapshot_id
+                    self.bundle.registry, requirements, snapshot_id,
+                    severity=incident.get("severity", "Medium"),
                 )
                 state["dispatch"] = dispatch
                 self._incident_allocations[incident_id] = [
                     a for act in dispatch["actions"] for a in act["assignments"]
                 ]
+                # 缺口時掃描較低優先事件，提出可抽調來源（僅建議，須人工核准）
+                self._attach_preemption_candidates(state)
                 step("DISPATCH_PLANNED", {
                     "actions": len(dispatch["actions"]),
+                    "severity": dispatch["severity"],
                     "has_shortfall": dispatch["has_shortfall"],
                     "gaps": dispatch["gaps"],
+                    "preemption_proposals": sum(
+                        len(a.get("preemption_candidates", [])) for a in dispatch["actions"]
+                    ),
                 })
             else:
                 step("DISPATCH_PLANNED", {"skipped": "此事件無需資源調度"})
+
+            # 重新注入釋出的資源可能可回填其他事件的缺口
+            self._rebalance()
 
             # SOP_RETRIEVED
             state["sop_evidence"] = self.bundle.sop.retrieve(state["triggered_rules"] + [7] if state["ete_result"] else state["triggered_rules"])
@@ -242,6 +252,185 @@ class Coordinator:
             step("FAILED_FINAL", {"error": str(exc)})
 
         self.incident_states[state["incident_id"]] = state
+        return state
+
+    # ---- 調度彈性：優先權抽調建議 / 釋出回填 ----
+
+    def _iter_dispatch_actions(self):
+        """走訪全部事件的調度動作：yield (state, action)。"""
+        for st in self.incident_states.values():
+            for act in (st.get("dispatch") or {}).get("actions", []):
+                yield st, act
+
+    def _attach_preemption_candidates(self, state: dict) -> None:
+        """為缺口動作找出「較低優先事件」占用中的同類資源，列為可抽調來源。
+
+        僅建議、不執行——指揮官核准（op=preempt）後才會真的移轉。
+        """
+        my_priority = state["dispatch"]["priority"]
+        for action in state["dispatch"]["actions"]:
+            if action.get("gap", 0) <= 0:
+                continue
+            candidates = []
+            for src_state, src_act in self._iter_dispatch_actions():
+                if src_state["incident_id"] == state["incident_id"]:
+                    continue
+                src_priority = (src_state.get("dispatch") or {}).get("priority", 0)
+                if src_priority >= my_priority:
+                    continue  # 只允許高優先抽調低優先
+                if src_act["resource_type"] != action["resource_type"]:
+                    continue
+                if src_act["status"] == "rejected" or src_act["fulfilled_count"] <= 0:
+                    continue
+                candidates.append({
+                    "source_incident_id": src_state["incident_id"],
+                    "source_action_id": src_act["action_id"],
+                    "source_severity": (src_state.get("dispatch") or {}).get("severity"),
+                    "available_to_pull": src_act["fulfilled_count"],
+                    "suggested_count": min(action["gap"], src_act["fulfilled_count"]),
+                })
+            candidates.sort(key=lambda c: dispatch_engine.SEVERITY_RANK.get(c["source_severity"], 0))
+            action["preemption_candidates"] = candidates
+            if candidates:
+                best = candidates[0]
+                action["escalation"] = (
+                    action.get("escalation", "")
+                    + f"｜可抽調建議：自 {best['source_incident_id']}"
+                    f"（{best['source_severity']}）抽調 {best['suggested_count']} 單位，需指揮官核准"
+                )
+
+    def _pull_from_action(self, incident_id: str, action: dict, count: int) -> list[dict]:
+        """自某動作釋出 count 單位（由 ETA 最遠的配置先抽），回傳釋出清單。"""
+        released: list[dict] = []
+        remaining = count
+        for a in sorted(action["assignments"], key=lambda x: -x["eta_minutes"]):
+            if remaining <= 0:
+                break
+            take = min(a["count"], remaining)
+            a["count"] -= take
+            remaining -= take
+            released.append({"resource_id": a["resource_id"], "label": a["label"],
+                             "count": take, "eta_minutes": a["eta_minutes"]})
+        action["assignments"] = [a for a in action["assignments"] if a["count"] > 0]
+        action["fulfilled_count"] -= count
+        action["gap"] = action["requested_count"] - action["fulfilled_count"]
+        self.bundle.registry.release(released)
+        current = self._incident_allocations.get(incident_id, [])
+        for r in released:
+            for a in list(current):
+                if a["resource_id"] == r["resource_id"] and a["count"] >= r["count"]:
+                    a["count"] -= r["count"]
+                    if a["count"] == 0:
+                        current.remove(a)
+                    break
+        return released
+
+    def _refresh_gaps(self, state: dict) -> None:
+        d = state.get("dispatch")
+        if not d:
+            return
+        d["gaps"] = [
+            {"action_id": a["action_id"], "resource_type": a["resource_type"],
+             "gap": a["gap"], "purpose": a.get("action", "")}
+            for a in d["actions"] if a.get("gap", 0) > 0 and a["status"] != "rejected"
+        ]
+        d["has_shortfall"] = bool(d["gaps"])
+
+    def _rebalance(self) -> None:
+        """資源釋出後的再規劃：依優先權（高→低）回填仍有缺口的動作。
+
+        只回填「尚未被拒絕」的動作；回填結果仍是待核准建議，
+        並在該事件決策鏈寫入 RESOURCE_REBALANCED。
+        """
+        shortfalls = [
+            (st, act) for st, act in self._iter_dispatch_actions()
+            if act.get("gap", 0) > 0 and act["status"] != "rejected"
+        ]
+        shortfalls.sort(
+            key=lambda x: -(x[0].get("dispatch") or {}).get("priority", 0))
+        for st, act in shortfalls:
+            assignments, remaining = self.bundle.registry.allocate(
+                act["resource_type"], act["gap"])
+            if not assignments:
+                continue
+            filled = act["gap"] - remaining
+            act["assignments"].extend(assignments)
+            act["fulfilled_count"] += filled
+            act["gap"] = remaining
+            if act["gap"] == 0 and act["status"] == "shortfall":
+                act["status"] = "proposed"
+                act.pop("escalation", None)
+            self._incident_allocations.setdefault(st["incident_id"], []).extend(assignments)
+            st["decision_trace"].append({
+                "step": "RESOURCE_REBALANCED",
+                "at": datetime.now().isoformat(timespec="milliseconds"),
+                "detail": {"action_id": act["action_id"], "refilled": filled,
+                           "remaining_gap": act["gap"],
+                           "note": "其他事件釋出資源後自動回填（仍待指揮官核准）"},
+            })
+            self._refresh_gaps(st)
+
+    def preempt(
+        self, incident_id: str, action_id: str,
+        source_incident_id: str, source_action_id: str, count: int,
+        reason: str = "", operator: str = "commander",
+    ) -> dict:
+        """指揮官核准的優先權抽調：自低優先事件移轉資源到高優先事件。
+
+        雙邊稽核：來源事件記 DISPATCH_PREEMPTED，目標事件記 HUMAN_OVERRIDE(op=preempt)。
+        """
+        state = self.incident_states.get(incident_id)
+        src_state = self.incident_states.get(source_incident_id)
+        if state is None or src_state is None:
+            raise KeyError("事件不存在")
+        action = next((a for a in state["dispatch"]["actions"] if a["action_id"] == action_id), None)
+        src_act = next((a for a in src_state["dispatch"]["actions"]
+                        if a["action_id"] == source_action_id), None)
+        if action is None or src_act is None:
+            raise KeyError("調度動作不存在")
+        if src_act["resource_type"] != action["resource_type"]:
+            raise ValueError("資源類型不符，無法抽調")
+        if state["dispatch"]["priority"] <= src_state["dispatch"]["priority"]:
+            raise ValueError(
+                f"僅允許高優先抽調低優先（{state['dispatch']['severity']} ≤ "
+                f"{src_state['dispatch']['severity']}）")
+        count = min(count, src_act["fulfilled_count"], action["gap"])
+        if count <= 0:
+            raise ValueError("無可抽調數量（來源已無配置或目標已無缺口）")
+
+        now = datetime.now()
+        self._pull_from_action(source_incident_id, src_act, count)
+        src_act["status"] = "preempted" if src_act["fulfilled_count"] == 0 else src_act["status"]
+        src_act["escalation"] = (
+            f"遭高優先事件 {incident_id} 抽調 {count} 單位（{operator} 核准），"
+            f"目前配置 {src_act['fulfilled_count']}/{src_act['requested_count']}，缺口需人工補充")
+        src_state["decision_trace"].append({
+            "step": "DISPATCH_PREEMPTED",
+            "at": now.isoformat(timespec="milliseconds"),
+            "detail": {"action_id": source_action_id, "pulled_by": incident_id,
+                       "count": count, "operator": operator, "reason": reason},
+        })
+
+        assignments, gap_left = self.bundle.registry.allocate(action["resource_type"], count)
+        action["assignments"].extend(assignments)
+        action["fulfilled_count"] += count - gap_left
+        action["gap"] = action["requested_count"] - action["fulfilled_count"]
+        if action["gap"] == 0:
+            action["status"] = "proposed"
+            action.pop("escalation", None)
+        action["preemption_candidates"] = []
+        self._incident_allocations.setdefault(incident_id, []).extend(assignments)
+        state["decision_trace"].append({
+            "step": "HUMAN_OVERRIDE",
+            "at": now.isoformat(timespec="milliseconds"),
+            "detail": {"action_id": action_id, "op": "preempt", "override_by": operator,
+                       "override_reason": reason or f"自 {source_incident_id} 抽調 {count} 單位",
+                       "override_at": now.strftime("%Y-%m-%d %H:%M"),
+                       "source_incident_id": source_incident_id,
+                       "source_action_id": source_action_id, "count": count},
+        })
+        self._refresh_gaps(state)
+        self._refresh_gaps(src_state)
         return state
 
     # ---- 人工指揮：接受 / 拒絕 / 調整調度動作 ----
@@ -302,14 +491,10 @@ class Coordinator:
             "at": datetime.now().isoformat(timespec="milliseconds"),
             "detail": {"action_id": action_id, **override},
         })
-        # 覆寫後重算缺口摘要
-        state["dispatch"]["gaps"] = [
-            {"action_id": a["action_id"], "resource_type": a["resource_type"],
-             "gap": a["gap"], "purpose": a.get("action", "")}
-            for a in state["dispatch"]["actions"] if a.get("gap", 0) > 0
-            and a["status"] != "rejected"
-        ]
-        state["dispatch"]["has_shortfall"] = bool(state["dispatch"]["gaps"])
+        self._refresh_gaps(state)
+        # 拒絕/調降釋出的資源，自動回填其他事件的缺口（優先權排序）
+        if op in ("reject", "adjust"):
+            self._rebalance()
         return state
 
     def _release_action(self, incident_id: str, action: dict) -> None:

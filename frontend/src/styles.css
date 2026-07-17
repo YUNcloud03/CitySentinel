@@ -202,6 +202,12 @@ summary { cursor: pointer; color: #7dd3fc; font-size: 12.5px; }
 }
 .da-actions { display: flex; gap: 6px; margin-top: 6px; }
 .da-actions button { font-size: 11px; padding: 3px 10px; }
+.da-preempt { margin-top: 6px; }
+.da-preempt button {
+  font-size: 11px; padding: 4px 10px; width: 100%; text-align: left;
+  border-color: var(--amber); color: var(--amber); background: #1a1206;
+}
+.da-preempt button:hover:not(:disabled) { border-color: var(--red); color: var(--red); }
 
 /* 通報生命週期 */
 .noti {

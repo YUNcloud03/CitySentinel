@@ -49,9 +49,11 @@ class Resource:
 
 
 def default_resources() -> list[Resource]:
+    # 警力總量刻意有限（12）：三起事件併發即出現資源競爭，
+    # 用以展示優先權抽調與缺口回報（庫存太寬裕會 Demo 不出調度彈性）。
     return [
-        Resource("POL-01", POLICE, "交通警力 A 組", 12, 12, "信義分局", 6),
-        Resource("POL-02", POLICE, "交通警力 B 組", 8, 8, "大安分局", 9),
+        Resource("POL-01", POLICE, "交通警力 A 組", 8, 8, "信義分局", 6),
+        Resource("POL-02", POLICE, "交通警力 B 組", 4, 4, "大安分局", 9),
         Resource("SHU-01", SHUTTLE, "公車處接駁車隊", 6, 6, "市府轉運站", 8),
         Resource("SIG-01", SIGNAL_MAINT, "號誌搶修組", 4, 4, "交工處松山站", 12),
         Resource("SIGC-01", SIGNAL_CONTROL, "號誌時制控制台", 3, 3, "交控中心", 1),

@@ -117,7 +117,10 @@ export const api = {
   dispatchAction: (
     incidentId: string,
     actionId: string,
-    op: "accept" | "reject" | "adjust",
-    extra: { count?: number; reason?: string; operator?: string } = {}
+    op: "accept" | "reject" | "adjust" | "preempt",
+    extra: {
+      count?: number; reason?: string; operator?: string;
+      source_incident_id?: string; source_action_id?: string;
+    } = {}
   ) => post<any>(`/api/incidents/${incidentId}/dispatch/${actionId}`, { op, ...extra }),
 };

@@ -247,8 +247,11 @@ function DispatchSection({
 
   const act = async (
     actionId: string,
-    op: "accept" | "reject" | "adjust",
-    extra: { count?: number; reason?: string } = {}
+    op: "accept" | "reject" | "adjust" | "preempt",
+    extra: {
+      count?: number; reason?: string;
+      source_incident_id?: string; source_action_id?: string;
+    } = {}
   ) => {
     setBusyId(actionId);
     try {
@@ -284,6 +287,24 @@ function DispatchSection({
             {a.gap > 0 && <span className="warn"> 缺 {a.gap} 單位</span>}
           </div>
           {a.escalation && <div className="da-escalation">⚠ {a.escalation}</div>}
+          {a.gap > 0 && a.preemption_candidates?.length > 0 && (
+            <div className="da-preempt">
+              {a.preemption_candidates.map((c: any) => (
+                <button
+                  key={c.source_action_id}
+                  disabled={busyId === a.action_id}
+                  onClick={() => act(a.action_id, "preempt", {
+                    count: c.suggested_count,
+                    source_incident_id: c.source_incident_id,
+                    source_action_id: c.source_action_id,
+                    reason: `高優先事件抽調（來源 ${c.source_severity}）`,
+                  })}
+                >
+                  ⚡ 核准抽調 {c.suggested_count} 單位（自 {c.source_incident_id}／{c.source_severity}）
+                </button>
+              ))}
+            </div>
+          )}
           {a.agent_recommended_count && a.agent_recommended_count !== a.requested_count && (
             <div className="dim">（Agent 原建議 {a.agent_recommended_count} 單位，已人工調整為 {a.requested_count}）</div>
           )}
