@@ -10,13 +10,15 @@ import {
   TracePanel,
   WhatIfPanel,
 } from "./components";
+import GlobeIntro from "./GlobeIntro";
 import { AdvisorChatView, CitizenView, EmergencyModal, MonitorView, VerifyView } from "./views";
 
 const TICK_MS = 2500; // 前端節奏：2.5 秒推進一個資料時間點
 
-type Page = "command" | "monitor" | "verify" | "advisor" | "citizen";
+type Page = "overview" | "command" | "monitor" | "verify" | "advisor" | "citizen";
 
 const PAGES: [Page, string][] = [
+  ["overview", "總覽"],
   ["command", "指揮中心"],
   ["monitor", "監測中心"],
   ["verify", "紀錄與驗證"],
@@ -25,7 +27,7 @@ const PAGES: [Page, string][] = [
 ];
 
 export default function App() {
-  const [page, setPage] = useState<Page>("command");
+  const [page, setPage] = useState<Page>("overview");
   const [view, setView] = useState<SimView | null>(null);
   const [incident, setIncident] = useState<IncidentState | null>(null);
   const [available, setAvailable] = useState<any[]>([]);
@@ -144,6 +146,7 @@ export default function App() {
         </>
       )}
 
+      {page === "overview" && <GlobeIntro onEnter={setPage} />}
       {page === "monitor" && <MonitorView view={view} resourceKey={resourceKey} />}
       {page === "verify" && <VerifyView refreshKey={resourceKey} />}
       {page === "advisor" && <AdvisorChatView />}

@@ -1,5 +1,26 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, type Alert, type CrowdRow, type IncidentState, type Resource, type SimView, type TrafficRow } from "./api";
+
+/** 數字平滑計數（ease-out cubic）。 */
+export function useCountUp(target: number, duration = 600): number {
+  const [val, setVal] = useState(target);
+  const prevRef = useRef(target);
+  useEffect(() => {
+    const from = prevRef.current;
+    prevRef.current = target;
+    if (from === target) return;
+    const t0 = performance.now();
+    let raf = 0;
+    const tick = (t: number) => {
+      const p = Math.min(1, (t - t0) / duration);
+      setVal(Math.round(from + (target - from) * (1 - Math.pow(1 - p, 3))));
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target, duration]);
+  return val;
+}
 
 const RES_TYPE_LABEL: Record<string, string> = {
   Police: "交通警力",
@@ -44,11 +65,12 @@ export function StatusCards({
 }) {
   const traffic = view?.traffic ?? {};
   const rows = Object.values(traffic);
-  const nA = rows.filter((r) => r.congestion_level === "A").length;
-  const nB = rows.filter((r) => r.congestion_level === "B").length;
+  const nA = useCountUp(rows.filter((r) => r.congestion_level === "A").length);
+  const nB = useCountUp(rows.filter((r) => r.congestion_level === "B").length);
   const alertLevel = nA > 0 ? "紅色警戒" : nB > 0 ? "黃色警戒" : "正常";
   const alertCls = nA > 0 ? "red" : nB > 0 ? "amber" : "green";
   const ete = incident?.ete_result;
+  const eteVal = useCountUp(ete?.ete_minutes_display ?? 0);
   const multi = incident?.notifications?.multilingual_required;
 
   return (
@@ -65,7 +87,7 @@ export function StatusCards({
       </div>
       <div className="card">
         <div className="card-label">預計恢復 ETE</div>
-        <div className="card-value">{ete ? `${ete.ete_minutes_display} 分` : "—"}</div>
+        <div className="card-value">{ete ? `${eteVal} 分` : "—"}</div>
         <div className="card-sub">{ete ? `基準${ete.base_clearance_minutes}+壅塞${ete.congestion_penalty_minutes.toFixed(1)}` : ""}</div>
       </div>
       <div className="card">
@@ -137,17 +159,32 @@ export function CrowdPanel({ crowd }: { crowd: Record<string, CrowdRow> }) {
 // ---- 預警清單 ----
 
 export function AlertFeed({ alerts }: { alerts: Alert[] }) {
+  // 未讀狀態：新預警帶低頻呼吸光，hover 即標記已讀（不閃爍干擾閱讀）
+  const readRef = useRef<Set<string>>(new Set());
+  const [, force] = useState(0);
   if (!alerts.length) return null;
+  const keyOf = (a: Alert) => `${a.rule_id}|${a.entity_id}`;
   return (
     <div className="panel alert-feed">
       <h3>自動預警</h3>
-      {alerts.map((a, i) => (
-        <div className="alert-item" key={i}>
-          <RuleBadge id={a.rule_id} />
-          <span className="alert-entity">{a.entity_id}</span>
-          <div className="alert-actions">{a.actions.join("；")}</div>
-        </div>
-      ))}
+      {alerts.map((a, i) => {
+        const k = keyOf(a);
+        const unread = !readRef.current.has(k);
+        return (
+          <div
+            className={`alert-item ${unread ? "unread" : ""}`}
+            key={k}
+            style={{ animationDelay: `${i * 60}ms` }}
+            onMouseEnter={() => {
+              if (unread) { readRef.current.add(k); force((n) => n + 1); }
+            }}
+          >
+            <RuleBadge id={a.rule_id} />
+            <span className="alert-entity">{a.entity_id}</span>
+            <div className="alert-actions">{a.actions.join("；")}</div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -481,6 +518,7 @@ const NOTI_STATUS_LABEL: Record<string, string> = {
 export function NotificationLifecyclePanel({ refreshKey }: { refreshKey: number }) {
   const [items, setItems] = useState<any[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [previewLang, setPreviewLang] = useState<string>("zh");
 
   const reload = () => { api.notifications().then(setItems).catch(() => {}); };
   useEffect(reload, [refreshKey]);
@@ -505,18 +543,47 @@ export function NotificationLifecyclePanel({ refreshKey }: { refreshKey: number 
             <b>{n.notification_id}</b>
             <span className={`noti-status s-${n.status}`}>{NOTI_STATUS_LABEL[n.status] ?? n.status}</span>
           </div>
-          <div className="dim small">{n.incident_id}｜{n.target_area}｜{n.languages.join("/")}</div>
-          {n.cms && <div className="cms small">{n.cms}</div>}
+          <div className="dim small">{n.incident_id}｜{n.target_area}</div>
+          {/* 語言切換預覽（點選切換中英日韓） */}
+          {n.messages && Object.keys(n.messages).length > 0 && (
+            <>
+              <div className="lang-tabs">
+                {Object.keys(n.messages).map((lang) => (
+                  <button key={lang} className={previewLang === lang ? "active" : ""}
+                    onClick={() => setPreviewLang(lang)}>
+                    {lang}
+                  </button>
+                ))}
+              </div>
+              <div className="noti-preview" key={previewLang}>
+                {n.messages[previewLang] ?? n.messages.zh}
+              </div>
+            </>
+          )}
           {n.deliveries && (
-            <div className="noti-deliveries">
-              {n.deliveries.map((d: any) => (
-                <span key={d.channel}
-                  className={`chip ${d.status === "DELIVERY_CONFIRMED" ? "green" : "red"}`}
-                  title={d.detail}>
-                  {d.channel} {d.status === "DELIVERY_CONFIRMED" ? "✓" : "✕"}
+            <>
+              <div className="noti-deliveries">
+                {n.deliveries.map((d: any) => (
+                  <span key={d.channel}
+                    className={`chip ${d.status === "DELIVERY_CONFIRMED" ? "green" : "red"}`}
+                    title={d.detail}>
+                    {d.channel} {d.status === "DELIVERY_CONFIRMED" ? "✓" : "✕"}
+                  </span>
+                ))}
+              </div>
+              <div className="delivery-rate">
+                <div className="delivery-bar">
+                  <i style={{
+                    width: `${Math.round(
+                      (n.deliveries.filter((d: any) => d.status === "DELIVERY_CONFIRMED").length /
+                        n.channels.length) * 100)}%`,
+                  }} />
+                </div>
+                <span className="rate-num">
+                  送達 {n.deliveries.filter((d: any) => d.status === "DELIVERY_CONFIRMED").length}/{n.channels.length}
                 </span>
-              ))}
-            </div>
+              </div>
+            </>
           )}
           <div className="da-actions">
             {n.status === "READY_FOR_APPROVAL" && (
@@ -676,21 +743,36 @@ export function AISummarySection({ incident }: { incident: IncidentState }) {
 // ---- 決策鏈 ----
 
 export function TracePanel({ incident }: { incident: IncidentState | null }) {
+  // 步驟逐步展開（staggered）＋ 點擊查看該步證據
+  const [expanded, setExpanded] = useState<number | null>(null);
+  useEffect(() => setExpanded(null), [incident?.incident_id]);
   if (!incident) return (
     <div className="panel trace"><h3>Agent 決策鏈</h3><p className="dim">注入事件後顯示處理流程</p></div>
   );
+  const step = expanded != null ? incident.decision_trace[expanded] : null;
   return (
     <div className="panel trace">
       <h3>Agent 決策鏈｜{incident.incident_id}</h3>
       <div className="trace-flow">
         {incident.decision_trace.map((t, i) => (
-          <div className="trace-step" key={i} title={JSON.stringify(t.detail)}>
+          <div
+            className={`trace-step ${expanded === i ? "expanded" : ""}`}
+            key={`${incident.incident_id}-${i}`}
+            style={{ animationDelay: `${i * 80}ms` }}
+            onClick={() => setExpanded(expanded === i ? null : i)}
+          >
             <div className="dot" />
             <div className="step-name">{t.step}</div>
             <div className="step-time">{t.at.slice(11)}</div>
           </div>
         ))}
       </div>
+      {step && (
+        <div className="trace-detail">
+          <div className="td-step">{step.step}｜{step.at.slice(11)}</div>
+          <div className="mono small">{JSON.stringify(step.detail, null, 2)}</div>
+        </div>
+      )}
     </div>
   );
 }
