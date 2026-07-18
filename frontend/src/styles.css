@@ -49,10 +49,14 @@ body {
   flex: 1; min-height: 0;
   display: grid; grid-template-rows: auto 1fr auto; gap: 8px;
 }
-.cockpit-body { display: grid; grid-template-columns: 1fr 360px; gap: 8px; min-height: 0; }
+.cockpit-body {
+  display: grid; grid-template-columns: 1fr 360px;
+  grid-template-rows: minmax(0, 1fr); gap: 8px; min-height: 0;
+}
 .map-region { position: relative; min-height: 0; display: flex; }
 .map-region .map-wrap { flex: 1; min-height: 0; }
-.map-region .map, .map-region .map-wrap { min-height: 0; }
+/* 駕駛艙內地圖填滿 grid 列（覆寫通用 min-height:420px，改以 100% 填滿） */
+.map-region .map-wrap, .map-region .map { min-height: 0; height: 100%; }
 
 /* 城市狀態列 */
 .status-bar {
@@ -208,8 +212,6 @@ body {
 }
 .stage-step { padding: 5px 0; border-top: 1px solid var(--border); font-size: 12px; }
 .stage-step:first-child { border-top: none; }
-
-@media (max-width: 1200px) {
 
 header {
   display: flex; align-items: center; gap: 18px;
