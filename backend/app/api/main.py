@@ -118,6 +118,28 @@ def simulation_alerts():
     return player.alert_log
 
 
+@app.get("/api/simulation/timeline")
+def simulation_timeline():
+    """時間軸：所有資料時間點 + 重要事件 marker（供時間條拖曳回放）。"""
+    from ..data_loader import format_ts, traffic_snapshot
+    from ..engines.rule_engine import classify_congestion
+
+    stamps = player.timestamps
+    incident_ts = {i["timestamp"]: i["event_id"] for i in bundle.incidents.values()}
+    markers = []
+    for i, ts in enumerate(stamps):
+        label = format_ts(ts)
+        kind = None
+        if label in incident_ts:
+            kind = "incident"
+        else:
+            snap = traffic_snapshot(bundle.traffic, ts)
+            if any(classify_congestion(r.saturation_score) == "A" for r in snap.values()):
+                kind = "critical"
+        markers.append({"index": i, "time": label, "kind": kind})
+    return {"timestamps": [format_ts(t) for t in stamps], "markers": markers}
+
+
 # ---- 16.3–16.4 事件注入 ----
 
 @app.post("/api/incidents/inject")

@@ -55,6 +55,18 @@ export interface IncidentState {
   sop_evidence: { rule_id: number; title: string; text: string }[];
   notifications: any;
   decision_trace: { step: string; at: string; detail: any }[];
+  coordinator_summary?: {
+    verdict: string;
+    actions: string[];
+    escalation: string;
+    basis: string;
+  };
+  confidence?: {
+    confidence_score: number;
+    level: string;
+    evidence: string[];
+  };
+  notification_id?: string;
   errors: string[];
 }
 
@@ -92,6 +104,7 @@ export const api = {
   simSeek: (timestamp: string) => post<SimView>("/api/simulation/seek", { timestamp }),
   simTick: () => post<SimView>("/api/simulation/tick"),
   simState: () => get<SimView>("/api/simulation/state"),
+  timeline: () => get<{ timestamps: string[]; markers: { index: number; time: string; kind: string | null }[] }>("/api/simulation/timeline"),
   inject: (event_id: string) => post<IncidentState>("/api/incidents/inject", { event_id }),
   incidents: () => get<{ available: any[]; processed: string[] }>("/api/incidents"),
   whatIfNL: (question: string) => post<any>("/api/what-if/nl", { question }),

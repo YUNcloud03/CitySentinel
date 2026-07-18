@@ -30,6 +30,58 @@ from ..resources.registry import ResourceRegistry
 from ..retrievers.sop_retriever import SOPRetriever
 
 
+def build_coordinator_summary(state: dict) -> dict:
+    """從已計算完成的事件狀態，組出「總司令一句話決策」。
+
+    確定性：全部欄位取自引擎已算好的結果，不新增判斷、不改數值。
+    四段：判定（可信度）、行動（疏散+調度）、升級條件、依據（SOP+ETE+佐證）。
+    """
+    conf = state.get("confidence") or {}
+    attr = state.get("rule_attribution") or {}
+    caused = attr.get("caused_by_incident", state.get("triggered_rules", []))
+    routing = state.get("routing_result") or {}
+    primary = routing.get("primary_route")
+    ete = state.get("ete_result") or {}
+    dispatch = state.get("dispatch") or {}
+    event = state.get("event", {})
+
+    verdict = (
+        f"{event.get('type', '事件')}於{event.get('location', '受影響區域')}，"
+        f"可信度{conf.get('level', '—')}"
+        + (f"（{round(conf['confidence_score'] * 100)}%）" if conf.get("confidence_score") else "")
+    )
+
+    actions: list[str] = []
+    if primary:
+        note = "（已壅塞，併行大眾運輸）" if primary.get("congested") else ""
+        actions.append(f"主疏散改道{primary['name']}{note}")
+    police = next((a for a in dispatch.get("actions", []) if a["resource_type"] == "Police"), None)
+    if police:
+        actions.append(f"派遣 {police['fulfilled_count']} 名交通警力")
+    if 3 in caused:
+        actions.append("啟動捷運過站不停與接駁分流")
+    if 5 in caused:
+        actions.append("每路口配置警力人工指揮")
+    if not actions:
+        actions.append("維持局部監測")
+
+    if dispatch.get("has_shortfall"):
+        escalation = "資源存在缺口，需人工升級調度或跨區支援（不得標示為已達成）"
+    elif 6 in state.get("triggered_rules", []):
+        escalation = "區域漫遊率達門檻，已啟動全區多語推播"
+    else:
+        escalation = "若 5 分鐘內受影響路段飽和度未降至門檻以下，升級全區多語推播"
+
+    basis_parts = [f"SOP {'、'.join(map(str, caused))}"] if caused else []
+    if ete.get("ete_minutes_display"):
+        basis_parts.append(f"ETE {ete['ete_minutes_display']} 分")
+    if conf.get("evidence"):
+        basis_parts.append(f"{len(conf['evidence'])} 項多源佐證")
+    basis = "；".join(basis_parts) or "SOP Rule Engine 判定"
+
+    return {"verdict": verdict, "actions": actions, "escalation": escalation, "basis": basis}
+
+
 class DataBundle:
     """一次載入全部主辦資料，供各引擎共用。"""
 
@@ -242,6 +294,9 @@ class Coordinator:
                 "note": "Dashboard 已更新；對外通報待人工核准",
                 "notification_status": notification["status"],
             })
+
+            # Coordinator 一句話決策摘要（判定/行動/升級條件/依據）——稽核產物
+            state["coordinator_summary"] = build_coordinator_summary(state)
 
             state["workflow_status"] = "completed"
             state["current_step"] = "COMPLETED"

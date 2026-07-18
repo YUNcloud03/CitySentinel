@@ -382,7 +382,128 @@ function statusLabel(s: string): string {
   return { proposed: "待核准", accepted: "已接受", adjusted: "已調整", rejected: "已拒絕", shortfall: "資源不足" }[s] ?? s;
 }
 
-function IncidentDetail({ incident, onRefresh }: { incident: IncidentState; onRefresh: () => void }) {
+// ---- Coordinator 一句話決策摘要（駕駛艙頭條） ----
+
+export function CoordinatorSummaryCard({ incident }: { incident: IncidentState }) {
+  const s = incident.coordinator_summary;
+  if (!s) return null;
+  return (
+    <div className="coord-summary">
+      <div className="cs-head">🎯 Coordinator 判定</div>
+      <div className="cs-verdict">{s.verdict}</div>
+      <div className="cs-row"><span className="cs-label">行動</span>
+        <span>{s.actions.join("、")}</span></div>
+      <div className="cs-row"><span className="cs-label">升級條件</span>
+        <span>{s.escalation}</span></div>
+      <div className="cs-row"><span className="cs-label">依據</span>
+        <span className="dim">{s.basis}</span></div>
+    </div>
+  );
+}
+
+// ---- 五階段決策鏈（決策依據與執行進度） ----
+
+const STAGES: { name: string; steps: string[]; hint: (t: any[]) => string }[] = [
+  { name: "事件驗證", steps: ["NEW", "VALIDATED", "CONFIDENCE_ASSESSED"],
+    hint: (t) => { const c = t.find((x) => x.step === "CONFIDENCE_ASSESSED"); return c ? `可信度 ${Math.round((c.detail.score ?? 0) * 100)}%` : "來源驗證"; } },
+  { name: "影響評估", steps: ["RULE_EVALUATED", "ETE_CALCULATED"],
+    hint: (t) => { const e = t.find((x) => x.step === "ETE_CALCULATED"); return e?.detail?.ete_minutes ? `ETE ${Math.round(e.detail.ete_minutes)} 分` : "規則判定"; } },
+  { name: "方案規劃", steps: ["ROUTE_PLANNED", "SOP_RETRIEVED"],
+    hint: (t) => { const r = t.find((x) => x.step === "ROUTE_PLANNED"); return r?.detail?.primary ? `主疏散 ${r.detail.primary}` : "SOP 檢索"; } },
+  { name: "資源與核准", steps: ["DISPATCH_PLANNED", "HUMAN_OVERRIDE", "DISPATCH_PREEMPTED", "RESOURCE_REBALANCED"],
+    hint: (t) => { const d = t.find((x) => x.step === "DISPATCH_PLANNED"); return d?.detail?.has_shortfall ? "資源缺口待升級" : d?.detail?.actions != null ? `派遣 ${d.detail.actions} 項` : "資源檢查"; } },
+  { name: "通知與追蹤", steps: ["CONTENT_GENERATED", "PUBLISHED", "COMPLETED"],
+    hint: (t) => { const p = t.find((x) => x.step === "PUBLISHED"); return p?.detail?.notification_status ? "通報待核准" : "內容生成"; } },
+];
+
+export function DecisionStages({ incident }: { incident: IncidentState | null }) {
+  const [open, setOpen] = useState<number | null>(null);
+  useEffect(() => setOpen(null), [incident?.incident_id]);
+  if (!incident) return <p className="dim">注入事件後顯示決策依據與執行進度。</p>;
+
+  const trace = incident.decision_trace;
+  const done = new Set(trace.map((t) => t.step));
+  const failed = incident.workflow_status === "failed";
+
+  return (
+    <div className="stages">
+      <div className="stage-rail">
+        {STAGES.map((st, i) => {
+          const hit = st.steps.some((s) => done.has(s));
+          return (
+            <div key={i} className={`stage ${hit ? "done" : "pending"} ${open === i ? "sel" : ""}`}
+              onClick={() => setOpen(open === i ? null : i)}>
+              <div className="stage-dot">{hit ? "●" : "○"}</div>
+              <div className="stage-name">{i + 1}. {st.name}</div>
+              <div className="stage-hint dim">{hit ? st.hint(trace) : "待處理"}</div>
+            </div>
+          );
+        })}
+      </div>
+      {open != null && (
+        <div className="stage-detail">
+          <div className="td-step">{STAGES[open].name}</div>
+          {trace.filter((t) => STAGES[open].steps.includes(t.step)).map((t, i) => (
+            <div key={i} className="stage-step">
+              <b>{t.step}</b> <span className="dim">{t.at.slice(11)}</span>
+              <div className="mono small">{JSON.stringify(t.detail, null, 1)}</div>
+            </div>
+          ))}
+          {failed && <div className="warn">流程未完成，以上為已完成階段。</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- 證據 Tab（可信度 + 觸發證據） ----
+
+export function EvidenceTab({ incident }: { incident: IncidentState | null }) {
+  if (!incident) return <p className="dim">注入事件後顯示可信度與資料佐證。</p>;
+  const conf = incident.confidence;
+  return (
+    <div>
+      {conf && (
+        <div className="conf-card">
+          <div className="conf-head">
+            <b>事件可信度</b>
+            <span className={`conf-score lv-${conf.level}`}>
+              {Math.round(conf.confidence_score * 100)}%｜{conf.level}
+            </span>
+          </div>
+          <ul className="conf-evidence">
+            {conf.evidence.map((e, i) => <li key={i}>{e}</li>)}
+          </ul>
+        </div>
+      )}
+      {incident.trigger_details && incident.trigger_details.length > 0 && (
+        <>
+          <h4>觸發證據</h4>
+          {incident.trigger_details.map((t, i) => (
+            <div className="evidence" key={i}>
+              <RuleBadge id={t.rule_id} /> <b>{t.entity_id}</b>
+              <div className="mono small">{JSON.stringify(t.evidence, null, 1)}</div>
+            </div>
+          ))}
+        </>
+      )}
+      {incident.sop_evidence.length > 0 && (
+        <details>
+          <summary>SOP 依據原文（{incident.sop_evidence.map((s) => s.rule_id).join("、")}）</summary>
+          {incident.sop_evidence.map((s) => (
+            <div className="sop-text" key={s.rule_id}>
+              <b>第 {s.rule_id} 條 {s.title}</b>
+              <pre>{s.text}</pre>
+            </div>
+          ))}
+        </details>
+      )}
+      <p className="dim small">完整資料佐證（SHA256、引擎門檻）見「紀錄與驗證」頁。</p>
+    </div>
+  );
+}
+
+export function IncidentDetail({ incident, onRefresh }: { incident: IncidentState; onRefresh: () => void }) {
   const routing = incident.routing_result;
   const ete = incident.ete_result;
   const noti = incident.notifications;

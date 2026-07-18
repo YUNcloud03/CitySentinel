@@ -1,17 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type IncidentState, type SimView } from "./api";
-import MapView from "./MapView";
-import {
-  AlertFeed,
-  CustomEventForm,
-  IncidentPanel,
-  NotificationLifecyclePanel,
-  StatusCards,
-  TracePanel,
-  WhatIfPanel,
-} from "./components";
+import Cockpit from "./Cockpit";
 import GlobeIntro from "./GlobeIntro";
-import { AdvisorChatView, CitizenView, EmergencyModal, MonitorView, VerifyView } from "./views";
+import { AdvisorChatView, CitizenView, MonitorView, VerifyView } from "./views";
 
 const TICK_MS = 2500; // 前端節奏：2.5 秒推進一個資料時間點
 
@@ -85,8 +76,12 @@ export default function App() {
     setResourceKey((k) => k + 1);
   }, [incident]);
 
+  const seekTo = useCallback(async (ts: string) => {
+    setView(await api.simSeek(ts));
+  }, []);
+
   return (
-    <div className="app">
+    <div className={`app ${page === "command" ? "app-cockpit" : ""}`}>
       <header>
         <h1>城市應變 AI Command Center</h1>
         <nav className="page-nav">
@@ -114,36 +109,21 @@ export default function App() {
       </header>
 
       {page === "command" && (
-        <>
-          <StatusCards view={view} incident={incident} />
-          <main className="command-grid">
-            <div className="col center">
-              <MapView view={view} incident={incident} />
-              <AlertFeed alerts={view?.active_alerts ?? []} />
-            </div>
-            <div className="col right">
-              <IncidentPanel
-                available={available}
-                incident={incident}
-                onInject={inject}
-                onRefresh={refreshIncident}
-                busy={busy}
-              />
-              <CustomEventForm
-                onInjected={(state) => {
-                  setIncident(state);
-                  setResourceKey((k) => k + 1);
-                  api.simSeek(state.event.timestamp).then(setView).catch(() => {});
-                }}
-              />
-              <NotificationLifecyclePanel refreshKey={resourceKey} />
-            </div>
-          </main>
-          <footer>
-            <TracePanel incident={incident} />
-            <WhatIfPanel />
-          </footer>
-        </>
+        <Cockpit
+          view={view}
+          incident={incident}
+          available={available}
+          busy={busy}
+          resourceKey={resourceKey}
+          onInject={inject}
+          onInjectedCustom={(state) => {
+            setIncident(state);
+            setResourceKey((k) => k + 1);
+            api.simSeek(state.event.timestamp).then(setView).catch(() => {});
+          }}
+          onRefresh={refreshIncident}
+          onSeekIndex={seekTo}
+        />
       )}
 
       {page === "overview" && <GlobeIntro onEnter={setPage} />}
@@ -151,8 +131,6 @@ export default function App() {
       {page === "verify" && <VerifyView refreshKey={resourceKey} />}
       {page === "advisor" && <AdvisorChatView />}
       {page === "citizen" && <CitizenView />}
-
-      <EmergencyModal view={view} />
     </div>
   );
 }

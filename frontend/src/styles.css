@@ -41,6 +41,175 @@ body {
 }
 
 .app { display: flex; flex-direction: column; gap: 10px; padding: 12px; min-height: 100vh; }
+/* 指揮中心：固定駕駛艙，整頁不捲動（規格 §3/§9） */
+.app-cockpit { height: 100vh; overflow: hidden; padding: 8px; gap: 8px; }
+
+/* ===== 駕駛艙 App Shell ===== */
+.cockpit {
+  flex: 1; min-height: 0;
+  display: grid; grid-template-rows: auto 1fr auto; gap: 8px;
+}
+.cockpit-body { display: grid; grid-template-columns: 1fr 360px; gap: 8px; min-height: 0; }
+.map-region { position: relative; min-height: 0; display: flex; }
+.map-region .map-wrap { flex: 1; min-height: 0; }
+.map-region .map, .map-region .map-wrap { min-height: 0; }
+
+/* 城市狀態列 */
+.status-bar {
+  display: flex; gap: 8px; background: var(--panel);
+  border: 1px solid var(--border); border-radius: var(--r-card);
+  padding: 8px 14px;
+}
+.sb-item {
+  display: flex; flex-direction: column; gap: 2px; padding: 2px 14px 2px 0;
+  border-right: 1px solid var(--border); min-width: 92px;
+}
+.sb-item:last-child { border-right: none; }
+.sb-k { font-size: 10px; color: var(--slate); text-transform: uppercase; letter-spacing: 1px; }
+.sb-item b { font-size: 15px; color: #fff; font-weight: 700; letter-spacing: -0.01em; }
+.sb-red b { color: var(--red); }
+.sb-amber b { color: var(--amber); }
+.sb-green b { color: var(--green); }
+
+/* 右側情境抽屜 */
+.right-drawer {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--r-card); display: flex; flex-direction: column; min-height: 0;
+}
+.rd-tabs { display: flex; gap: 2px; padding: 6px 6px 0; border-bottom: 1px solid var(--border); }
+.rd-tabs button {
+  flex: 1; border: none; border-radius: var(--r-input) var(--r-input) 0 0;
+  background: transparent; color: var(--dim); padding: 8px 0; font-size: 12.5px;
+  position: relative;
+}
+.rd-tabs button:hover { color: #fff; transform: none; }
+.rd-tabs button.active { background: var(--panel-2); color: #fff; }
+.tab-dot {
+  position: absolute; top: 6px; right: 10px; width: 6px; height: 6px;
+  border-radius: 50%; background: var(--red);
+}
+.tab-dot.blue { background: var(--cyan); }
+.rd-body { flex: 1; overflow-y: auto; padding: 12px; min-height: 0; }
+.rd-body .panel { border: none; padding: 0; background: transparent; animation: none; }
+
+/* 事件佇列 */
+.event-queue { margin-bottom: 12px; }
+.eq-label { font-size: 10px; color: var(--slate); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+.eq-card {
+  display: block; width: 100%; text-align: left; border-radius: var(--r-chip);
+  border: 1px solid var(--border); background: var(--panel-2);
+  padding: 8px 10px; margin-bottom: 6px;
+}
+.eq-card.active { border-color: var(--cyan); }
+.eq-row { display: flex; justify-content: space-between; align-items: center; }
+
+/* Coordinator 決策摘要 */
+.coord-summary {
+  border: 1px solid rgba(0, 122, 252, 0.35); border-left: 3px solid var(--cyan);
+  border-radius: var(--r-chip); background: rgba(0, 122, 252, 0.06);
+  padding: 10px 12px; margin-bottom: 12px;
+}
+.cs-head { font-size: 12px; font-weight: 700; color: var(--cyan); margin-bottom: 6px; }
+.cs-verdict { font-size: 13px; color: #fff; font-weight: 500; margin-bottom: 6px; line-height: 1.5; }
+.cs-row { display: flex; gap: 8px; font-size: 12px; margin-top: 4px; line-height: 1.5; }
+.cs-label {
+  flex-shrink: 0; width: 52px; color: var(--slate); font-size: 10.5px;
+  padding-top: 1px; letter-spacing: 0.5px;
+}
+
+/* Alert Rail（地圖右上，不阻塞） */
+.alert-rail {
+  position: absolute; top: 10px; right: 10px; z-index: 6;
+  display: flex; gap: 8px; padding: 6px 12px; border-radius: var(--r-pill);
+  background: rgba(14, 16, 18, 0.85); border: 1px solid var(--border);
+  backdrop-filter: blur(6px); font-size: 12px;
+}
+.alert-rail .ar { white-space: nowrap; }
+.alert-rail .ar.red { color: var(--red); }
+.alert-rail .ar.amber { color: var(--amber); }
+.alert-rail .ar.blue { color: var(--cyan); }
+
+/* 事件快報卡（地圖右下滑出） */
+.report-card {
+  position: absolute; right: 10px; bottom: 44px; z-index: 6; width: 300px;
+  background: var(--panel); border: 1px solid var(--red); border-left: 3px solid var(--red);
+  border-radius: var(--r-card); padding: 12px 14px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  animation: report-slide 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes report-slide { from { opacity: 0; transform: translateX(30px); } to { opacity: 1; transform: translateX(0); } }
+.rc-head { font-size: 11px; color: var(--red); font-weight: 700; }
+.rc-title { font-size: 15px; color: #fff; font-weight: 700; margin: 4px 0; }
+.rc-meta { font-size: 11.5px; color: var(--fog); line-height: 1.5; }
+.rc-actions { display: flex; gap: 8px; margin-top: 10px; }
+.rc-actions button { font-size: 12px; padding: 5px 14px; }
+
+/* 時間條 */
+.cockpit-foot {
+  display: flex; align-items: center; gap: 14px;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--r-card); padding: 8px 14px;
+}
+.time-bar { flex: 1; display: flex; align-items: center; gap: 12px; }
+.tb-track { flex: 1; position: relative; }
+.tb-track input[type="range"] {
+  width: 100%; height: 4px; -webkit-appearance: none; appearance: none;
+  background: var(--panel-2); border-radius: 2px; outline: none; cursor: pointer;
+}
+.tb-track input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--cyan); cursor: pointer; box-shadow: 0 0 8px rgba(0, 122, 252, 0.6);
+}
+.tb-markers { position: absolute; top: -3px; left: 0; right: 0; height: 10px; pointer-events: none; }
+.tb-marker {
+  position: absolute; width: 8px; height: 8px; border-radius: 50%;
+  transform: translateX(-50%); pointer-events: auto; cursor: pointer;
+  border: 1.5px solid var(--bg);
+}
+.tb-marker.incident { background: var(--red); }
+.tb-marker.critical { background: var(--amber); }
+.tb-readout { font-size: 11.5px; white-space: nowrap; font-feature-settings: "lnum"; }
+.foot-entries { display: flex; gap: 6px; }
+.foot-entries button { font-size: 12px; padding: 5px 12px; }
+.foot-entries button.active { background: var(--cyan); border-color: var(--cyan); color: #fff; }
+
+/* 底部抽屜面板 */
+.bottom-panel {
+  position: fixed; left: 8px; right: 8px; bottom: 62px; z-index: 40; max-height: 44vh;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-card);
+  box-shadow: 0 -8px 40px rgba(0, 0, 0, 0.5); display: flex; flex-direction: column;
+  animation: bp-up 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes bp-up { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+.bp-head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 16px; border-bottom: 1px solid var(--border);
+}
+.bp-head b { color: #fff; font-size: 13px; }
+.bp-body { overflow-y: auto; padding: 14px 16px; }
+.bp-body .panel { border: none; background: transparent; padding: 0; animation: none; }
+
+/* 五階段決策鏈 */
+.stage-rail { display: flex; gap: 8px; }
+.stage {
+  flex: 1; text-align: center; padding: 10px 6px; border-radius: var(--r-chip);
+  border: 1px solid var(--border); background: var(--panel-2); cursor: pointer;
+  transition: border-color 0.2s, transform 0.15s;
+}
+.stage:hover { transform: translateY(-2px); }
+.stage.sel { border-color: var(--cyan); }
+.stage-dot { font-size: 16px; color: var(--slate); }
+.stage.done .stage-dot { color: var(--green); }
+.stage-name { font-size: 11.5px; font-weight: 600; color: #fff; margin: 3px 0; }
+.stage-hint { font-size: 10.5px; }
+.stage-detail {
+  margin-top: 12px; border: 1px solid var(--border); border-radius: var(--r-chip);
+  background: var(--panel-2); padding: 10px 12px;
+}
+.stage-step { padding: 5px 0; border-top: 1px solid var(--border); font-size: 12px; }
+.stage-step:first-child { border-top: none; }
+
+@media (max-width: 1200px) {
 
 header {
   display: flex; align-items: center; gap: 18px;
