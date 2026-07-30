@@ -1,4 +1,14 @@
+# --- 核心（必要）---
 fastapi>=0.111
 uvicorn[standard]>=0.29
-pytest>=8.0
+pydantic>=2.0
+
+# --- 測試 ---
+pytest>=7.4
 httpx>=0.27
+
+# --- LLM providers（選用）---
+# 兩者皆未安裝或未設定金鑰時，系統自動降級為確定性模板，所有功能仍可完整運作。
+# 優先序：ANTHROPIC_API_KEY > OPENAI_API_KEY > 確定性模板
+anthropic>=0.116
+openai>=1.40

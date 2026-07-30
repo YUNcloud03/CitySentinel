@@ -1,4 +1,9 @@
-# 城市應變分析 AI Command Center — 完整技術文件
+> ⚠️ **本文件為 Phase 1–2 時期的早期快照，內容已過時**（未涵蓋資源調度、可信度評分、
+> LLM 生成與護欄、Tool-Calling Agent、通報生命週期、駕駛艙改版等 Phase 3–11 功能）。
+> 系統當前的權威技術規格請見 **[SYSTEM_SPECIFICATION.md](SYSTEM_SPECIFICATION.md)**。
+> 本檔保留僅供開發歷程參考。
+
+# 城市應變分析 AI Command Center — 完整技術文件（早期版本）
 
 > 2026 雲湧智生：臺灣生成式 AI 應用黑客松（中華電信命題）
 > 智慧交通指揮中樞 — 自動感知、事件驅動、可驗證決策、互動問答、多語通報
