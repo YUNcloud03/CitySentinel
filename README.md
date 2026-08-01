@@ -1,9 +1,68 @@
-# 城市應變分析 AI Command Center
+# CitySentinel 城市應變分析 AI Command Center
 
 2026 雲湧智生黑客松（中華電信命題）——智慧交通指揮中樞。
 核心原則：**SOP 判定、替代路徑、ETE、What-if 全部即時計算；LLM 只負責解釋與多語文字。**
 
-## 目前進度：Phase 1 競賽核心（已完成）
+> 完整技術規格請見 **[docs/SYSTEM_SPECIFICATION.md](docs/SYSTEM_SPECIFICATION.md)**
+
+---
+
+## 快速開始（組員請看這裡）
+
+### 第一次使用：只要跑一次
+
+**在檔案總管中雙擊 `setup.bat`**（或在終端機執行 `.\setup.bat`）
+
+腳本會自動完成：
+1. 偵測可用的 Python（需 3.10+）
+2. 建立虛擬環境 `.venv`
+3. 安裝後端相依套件
+4. 安裝前端相依套件
+
+> 沒有 Python？到 [python.org](https://www.python.org/downloads/) 下載 3.11，安裝時**務必勾選 "Add Python to PATH"**。
+> 沒有 Node.js？到 [nodejs.org](https://nodejs.org/) 下載 18 以上版本。
+
+### 每次開發：開兩個視窗
+
+| 動作 | 指令 | 網址 |
+|---|---|---|
+| 啟動後端 API | 雙擊 `start-backend.bat` | http://localhost:8000 |
+| 啟動前端 Dashboard | 雙擊 `start-frontend.bat` | http://localhost:5173 |
+| 執行測試 | 雙擊 `run-tests.bat` | — |
+
+打開瀏覽器到 **http://localhost:5173** 即可操作。
+
+### 為什麼要用虛擬環境？
+
+一台電腦常裝有多個 Python 版本，直接打 `python` 可能指到**沒有安裝套件的那一個**，出現 `No module named uvicorn` 這類錯誤。
+`.venv` 讓專案有自己獨立的套件環境，腳本一律使用 `.venv` 內的 Python，**不受系統 PATH 影響**，組員之間的環境也完全一致。
+
+### 常見問題
+
+| 症狀 | 原因與解法 |
+|---|---|
+| `No module named uvicorn` | 沒用 `.venv`。請用 `start-backend.bat` 啟動，不要自己打 `python -m uvicorn` |
+| 啟動時顯示 **Port 8000 already in use** | 其他程式佔用了 8000。腳本會列出佔用者 PID，關掉它後重試；或改用其他埠：`start-backend.bat 8010`（同時需修改 `frontend/vite.config.ts` 的 proxy 目標） |
+| Dashboard 一片空白／資料都是「—」 | 後端沒啟動，或 8000 被**別的專案**佔用。用 `curl http://localhost:8000/api/health` 確認，回應中要有 `"segments":15` 才是本系統 |
+| AI 摘要顯示「模板」而非「LLM 生成」 | 未設定 API 金鑰。複製 `.env.example` 為 `.env` 並填入金鑰。**沒有金鑰系統仍可完整運作**，只是文字改由確定性模板產生 |
+| 修改程式後畫面沒變 | 後端有 `--reload` 會自動重啟；前端 Vite 有熱更新。若仍無效，重新整理瀏覽器或重啟腳本 |
+
+### 環境變數（選用）
+
+複製 `.env.example` 為 `.env` 後填入金鑰即可啟用 LLM 功能：
+
+```
+ANTHROPIC_API_KEY=...     # 優先使用
+OPENAI_API_KEY=...        # 次選
+```
+
+⚠️ `.env` 已列入 `.gitignore`，**切勿將真實金鑰提交至版控**。
+
+---
+
+## 開發進度
+
+### Phase 1 競賽核心（已完成）
 
 - ✅ 資料層：官方五份資料載入與清洗（`Roaming_User_Pct` % 字串轉數值）
 - ✅ Rule Engine：SOP 1–6 確定性判定（含證據數值輸出）
