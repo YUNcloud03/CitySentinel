@@ -1,7 +1,38 @@
+# --- 機密：絕不進版控 ---
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets.json
+credentials.json
+
+# --- Python ---
 __pycache__/
 *.pyc
+*.pyo
 .pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# --- Node ---
 node_modules/
 dist/
-.env
-.venv/
+.vite/
+npm-debug.log*
+
+# --- 產出物 / 暫存 ---
+*.pdf.tmp
+slide-*.jpg
+~$*
+
+# --- 編輯器 / 作業系統 ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 主辦方命題說明文件（著作權屬主辦方，不進版控；系統執行不需要）
+data/raw/*.docx
