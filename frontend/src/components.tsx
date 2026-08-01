@@ -617,6 +617,11 @@ export function IncidentDetail({ incident, onRefresh }: { incident: IncidentStat
               <span className={`chip ${noti.multilingual_decision.triggered ? "purple" : ""}`}>
                 SOP 6 {noti.multilingual_decision.triggered ? "已觸發" : "未觸發"}
               </span>
+              {noti.multilingual_decision.assumed && (
+                <span className="chip amber" title={
+                  `實際最高漫遊率 ${noti.multilingual_decision.actual_max_pct}%`
+                }>假設值</span>
+              )}
               {noti.multilingual_decision.reason}
             </div>
           )}
@@ -751,6 +756,7 @@ export function CustomEventForm({ onInjected }: { onInjected: (state: IncidentSt
     status: "Closed",
     severity: "High",
     timestamp: "2026-05-20 22:00",
+    roaming_override_pct: "",  // ""＝依實際資料
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -764,6 +770,9 @@ export function CustomEventForm({ onInjected }: { onInjected: (state: IncidentSt
       const segName = SEGMENT_OPTIONS.find(([id]) => id === form.affected_segment)?.[1] ?? "";
       const state = await api.customIncident({
         ...form,
+        // 空字串＝不覆寫，須送 null 而非 ""（後端欄位為 float | None）
+        roaming_override_pct: form.roaming_override_pct === ""
+          ? null : Number(form.roaming_override_pct),
         location: segName,
         description: `自訂模擬事件：${segName} ${form.type}`,
       });
@@ -811,7 +820,22 @@ export function CustomEventForm({ onInjected }: { onInjected: (state: IncidentSt
             ))}
           </select>
         </label>
+        <label>漫遊率
+          <select value={form.roaming_override_pct}
+            onChange={(e) => set("roaming_override_pct", e.target.value)}>
+            <option value="">依實際資料</option>
+            {["8", "15", "25", "29", "30", "45"].map((p) => (
+              <option key={p} value={p}>{p}%（假設值）</option>
+            ))}
+          </select>
+        </label>
       </div>
+      {form.roaming_override_pct !== "" && (
+        <p className="dim small">
+          以假設值 {form.roaming_override_pct}% 取代該時間切面的實際漫遊率，用於演示
+          SOP 6 門檻（≥ 30% 才須多語）。來源資料不會被修改，事件與通報會標示為假設值。
+        </p>
+      )}
       <button className="primary" disabled={busy} onClick={submit}>
         {busy ? "分析中…" : "注入模擬事件"}
       </button>

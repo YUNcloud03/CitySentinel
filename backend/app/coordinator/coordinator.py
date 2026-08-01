@@ -9,6 +9,7 @@ Coordinator 不自己猜路徑、不自己算 ETE、不自己決定 SOP 門檻�
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 
 from .. import notifications
@@ -116,7 +117,19 @@ class Coordinator:
             raise KeyError(f"未知的事件 ID: {event_id}")
         return self.process_incident(incident, at=at)
 
-    def process_incident(self, incident: dict, at: datetime | None = None) -> dict:
+    def process_incident(
+        self,
+        incident: dict,
+        at: datetime | None = None,
+        roaming_override_pct: float | None = None,
+    ) -> dict:
+        """處理事件。
+
+        roaming_override_pct 供 Demo 演示 SOP 6 門檻用：官方資料在 20:00 後
+        漫遊率恆 >= 30%，若不覆寫就演不出「未觸發（僅中文）」的對照組。
+        覆寫只作用於本次判定所用的快照副本，來源資料與正式狀態均不變，
+        且會在事件、通報與系統紀錄標示為假設值，不與實際資料混淆。
+        """
         at = at or parse_ts(incident["timestamp"])
         incident_id = incident.get("event_id", "ADHOC")
         # 重新注入同一事件：先歸還前次佔用的資源，避免庫存被重複扣減
@@ -155,6 +168,12 @@ class Coordinator:
 
             traffic_snap = self.bundle.traffic_at(at)
             crowd_snap = self.bundle.crowd_at(at)
+            if roaming_override_pct is not None:
+                crowd_snap, assumption = self._apply_roaming_override(
+                    crowd_snap, roaming_override_pct
+                )
+                state["assumptions"] = [assumption]
+                step("ASSUMPTION_APPLIED", assumption)
 
             # RULE_EVALUATED：事件規則 + 當下人流規則（同一時間切面）
             incident_triggers = rule_engine.evaluate_incident(incident)
@@ -273,7 +292,9 @@ class Coordinator:
             step("SOP_RETRIEVED", {"rule_ids": [r["rule_id"] for r in state["sop_evidence"]]})
 
             # CONTENT_GENERATED
-            state["notifications"] = self._generate_notifications(state, incident, at, crowd_triggers)
+            state["notifications"] = self._generate_notifications(
+                state, incident, at, crowd_triggers, crowd_snap
+            )
             notification = self.bundle.notification_center.create_from_incident(state)
             state["notification_id"] = notification["notification_id"]
             step("CONTENT_GENERATED", {
@@ -564,7 +585,7 @@ class Coordinator:
 
     # ---- 內部 ----
 
-    def _generate_notifications(self, state, incident, at, crowd_triggers) -> dict:
+    def _generate_notifications(self, state, incident, at, crowd_triggers, crowd_snap=None) -> dict:
         """通報內容：LLM 生成（官方要求），必含 token 驗證把關，模板保底。"""
         from ..llm import generator
 
@@ -584,17 +605,56 @@ class Coordinator:
         roaming_triggers = [t for t in crowd_triggers if t["rule_id"] == 6]
         result["multilingual_required"] = bool(roaming_triggers)
         result["roaming_evidence"] = [t["evidence"] for t in roaming_triggers]
-        result["multilingual_decision"] = self._multilingual_decision(at, roaming_triggers)
+        result["multilingual_decision"] = self._multilingual_decision(
+            at, roaming_triggers, crowd_snap, state.get("assumptions")
+        )
         result["messages"] = msgs if roaming_triggers else {"zh": msgs["zh"]}
         return result
 
-    def _multilingual_decision(self, at: datetime, roaming_triggers: list[dict]) -> dict:
+    @staticmethod
+    def _apply_roaming_override(crowd_snap: dict, pct: float) -> tuple[dict, dict]:
+        """把該時間切面所有基地台的漫遊率覆寫為 pct（快照副本，不動來源資料）。
+
+        全部覆寫而非只改一台，是為了讓「最高漫遊率」確定等於 pct——
+        只改一台的話，其他基地台可能仍高於門檻而照樣觸發，Demo 就失去對照意義。
+        回傳 (覆寫後快照, 假設值說明)。
+        """
+        before = max((r.roaming_user_pct for r in crowd_snap.values()), default=None)
+        overridden = {
+            bs_id: replace(rec, roaming_user_pct=pct) for bs_id, rec in crowd_snap.items()
+        }
+        return overridden, {
+            "field": "roaming_user_pct",
+            "applied_pct": pct,
+            "actual_max_pct": before,
+            "scope": f"{len(overridden)} 個基地台（本次判定用快照）",
+            "note": (
+                f"漫遊率以模擬假設值 {pct:g}% 取代實際資料"
+                + (f"（實際最高 {before:g}%）" if before is not None else "")
+                + "；來源資料與正式狀態未變更"
+            ),
+        }
+
+    def _multilingual_decision(
+        self,
+        at: datetime,
+        roaming_triggers: list[dict],
+        crowd_snap: dict | None = None,
+        assumptions: list[dict] | None = None,
+    ) -> dict:
         """SOP 6 觸發判定說明（供 UI 與評審檢視「本次是否觸發、為什麼」）。
 
         未觸發時 crowd_triggers 不含任何項目，最高漫遊率須自行由該時間切面取得，
         才能說明「最高 12% < 30%」而不是只回一個 false。
+
+        crowd_snap 為本次實際判定所用的快照；若漫遊率經假設值覆寫，須沿用同一份
+        快照，否則說明文字會回報實際資料而與判定結果不一致。
         """
         threshold = rule_engine.ROAMING_THRESHOLD_PCT
+        assumed = next(
+            (a for a in (assumptions or []) if a.get("field") == "roaming_user_pct"), None
+        )
+        suffix = "（模擬假設值）" if assumed else ""
         if roaming_triggers:
             top = max(roaming_triggers, key=lambda t: t["evidence"]["roaming_user_pct"])
             ev = top["evidence"]
@@ -606,13 +666,15 @@ class Coordinator:
                 "bs_id": top["entity_id"],
                 "location_name": ev.get("location_name"),
                 "triggered_count": len(roaming_triggers),
+                "assumed": bool(assumed),
+                "actual_max_pct": assumed.get("actual_max_pct") if assumed else None,
                 "reason": (
-                    f"{ev.get('location_name') or top['entity_id']} 漫遊率 {pct:g}% "
+                    f"{ev.get('location_name') or top['entity_id']} 漫遊率 {pct:g}%{suffix} "
                     f"≥ {threshold:g}%，觸發 SOP 第 6 條，須產出多國語言"
                 ),
             }
 
-        snap = self.bundle.crowd_at(at)
+        snap = crowd_snap if crowd_snap is not None else self.bundle.crowd_at(at)
         top_rec = max(snap.values(), key=lambda r: r.roaming_user_pct, default=None)
         if top_rec is None:
             return {
@@ -622,6 +684,8 @@ class Coordinator:
                 "bs_id": None,
                 "location_name": None,
                 "triggered_count": 0,
+                "assumed": bool(assumed),
+                "actual_max_pct": assumed.get("actual_max_pct") if assumed else None,
                 "reason": "無基地台資料可判定，未觸發 SOP 第 6 條，僅產出中文",
             }
         return {
@@ -631,8 +695,10 @@ class Coordinator:
             "bs_id": top_rec.bs_id,
             "location_name": top_rec.location_name,
             "triggered_count": 0,
+            "assumed": bool(assumed),
+            "actual_max_pct": assumed.get("actual_max_pct") if assumed else None,
             "reason": (
-                f"最高漫遊率 {top_rec.roaming_user_pct:g}%（{top_rec.location_name}）"
+                f"最高漫遊率 {top_rec.roaming_user_pct:g}%{suffix}（{top_rec.location_name}）"
                 f"< {threshold:g}%，未觸發 SOP 第 6 條，僅產出中文"
             ),
         }

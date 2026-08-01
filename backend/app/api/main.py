@@ -254,6 +254,8 @@ class CustomIncidentRequest(BaseModel):
     location: str = ""
     description: str = ""
     timestamp: str = Field(pattern=r"^2026-05-20 ([01]\d|2[0-3]):[0-5]\d$")
+    # Demo 用漫遊率假設值；None＝沿用該時間切面的實際資料
+    roaming_override_pct: float | None = Field(default=None, ge=0, le=100)
 
     @field_validator("affected_segment")
     @classmethod
@@ -276,8 +278,11 @@ def inject_custom_incident(req: CustomIncidentRequest):
         raise HTTPException(status_code=422, detail=f"基地台 {req.affected_segment} 不存在")
 
     run_id = f"SIMRUN-{len(simulation_runs) + 1:03d}"
-    incident = {"event_id": f"CUSTOM_{run_id}", **req.model_dump()}
-    state = coordinator.process_incident(incident)
+    # 覆寫值是判定參數而非事件屬性，不併入 incident（否則會混進稽核用的事件內容）
+    payload = req.model_dump()
+    roaming_override = payload.pop("roaming_override_pct", None)
+    incident = {"event_id": f"CUSTOM_{run_id}", **payload}
+    state = coordinator.process_incident(incident, roaming_override_pct=roaming_override)
     simulation_runs.append({
         "simulation_run_id": run_id,
         "event_payload": incident,
