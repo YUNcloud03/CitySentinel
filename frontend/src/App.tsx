@@ -42,12 +42,22 @@ export default function App() {
 
   useEffect(() => {
     const timer = setInterval(async () => {
+      // 分頁不可見時不推進，避免背景空轉；切回來會立即補一次。
+      if (document.hidden) return;
       try {
         const v = playingRef.current ? await api.simTick() : await api.simState();
         setView(v);
       } catch { /* 後端未啟動時靜默 */ }
     }, TICK_MS);
-    return () => clearInterval(timer);
+    const onVisible = () => {
+      if (document.hidden) return;
+      api.simState().then((v) => { if (v?.sim_time) setView(v); }).catch(() => {});
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, []);
 
   const start = useCallback(async () => setView(await api.simStart(2)), []);
@@ -74,7 +84,14 @@ export default function App() {
 
   const refreshIncident = useCallback(async () => {
     if (!incident) return;
-    setIncident(await api.incidentState(incident.incident_id));
+    // 調度／核准後立刻同步事件、庫存與地圖快照，不等下一次輪詢。
+    const [state, v] = await Promise.all([
+      api.incidentState(incident.incident_id),
+      api.simState().catch(() => null),
+    ]);
+    setIncident(state);
+    // 播放器尚未定位時 simState 沒有快照欄位，覆蓋上去會讓地圖整片清空。
+    if (v?.sim_time) setView(v);
     setResourceKey((k) => k + 1);
   }, [incident]);
 

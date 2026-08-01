@@ -39,6 +39,8 @@ export default function GreenCorridorPanel({ view, result, onResult }: Props) {
   useEffect(() => {
     if (!result || result.approval_status !== "APPROVED_FOR_SIMULATION" || result.runtime_state.completed) return;
     const timer = window.setInterval(() => {
+      // 分頁不可見時暫停推進，切回來從原進度續跑（不跳秒）。
+      if (document.hidden) return;
       setElapsed((current) => {
         const next = Math.min(current + 5, result.runtime_state.total_seconds + 1);
         void api.greenCorridorState(result.scenario_id, next)
