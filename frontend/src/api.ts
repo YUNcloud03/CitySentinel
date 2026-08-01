@@ -1,4 +1,14 @@
-// 後端 API 封裝。型別對應 backend/app 的回傳結構（demo 用寬鬆型別）。
+// 後端 API 封裝。關鍵決策資料會在 API 邊界經 Zod 驗證後才進入 UI。
+import type { ZodType } from "zod";
+import {
+  advisorAnswerSchema,
+  customIncidentInputSchema,
+  greenCorridorSchema,
+  incidentStateSchema,
+  runtimeStateSchema,
+  simViewSchema,
+  validatePayload,
+} from "./schemas";
 
 export interface TrafficRow {
   road_name: string;
@@ -8,6 +18,13 @@ export interface TrafficRow {
   lane_status: string;
   congestion_level: "A" | "B" | "Normal";
   data_time: string;
+  simulation_source?: "organizer_dataset" | "incident_projection";
+  baseline_avg_speed?: number;
+  baseline_vehicle_count?: number;
+  baseline_saturation_score?: number;
+  event_avg_speed?: number;
+  event_vehicle_count?: number;
+  event_saturation_score?: number;
 }
 
 export interface CrowdRow {
@@ -33,12 +50,95 @@ export interface SimView {
   traffic?: Record<string, TrafficRow>;
   crowd?: Record<string, CrowdRow>;
   active_alerts?: Alert[];
+  simulation_context?: {
+    active: boolean;
+    model: string;
+    incident_id?: string;
+    starts_at?: string;
+    elapsed_minutes?: number;
+    affected_segment_id?: string;
+    changed_segment_ids?: string[];
+    dynamic_routing?: any;
+    baseline_source?: string;
+    deterministic?: boolean;
+    formula?: Record<string, string>;
+    response_phase?: "OBSTACLE_ACTIVE" | "DISPATCHING" | "CLEARANCE_ACTIVE" | "CLEARED";
+    response_started_at?: string | null;
+    accepted_action_ids?: string[];
+    accepted_action_ratio?: number;
+    mitigation_progress?: number;
+    capacity_factor?: number;
+    next_review_at?: string;
+    review_overdue?: boolean;
+    production_state_modified?: false;
+    reason?: string;
+  };
+  scenario_comparison?: ScenarioComparison | null;
   message?: string;
+}
+
+export interface ScenarioComparisonMetrics {
+  avg_speed: number;
+  vehicle_count: number;
+  saturation_score: number;
+  congestion_level: "A" | "B" | "Normal";
+}
+
+export interface ScenarioComparisonRow {
+  available: boolean;
+  state: string;
+  locked_reason?: string | null;
+  effect_started?: boolean;
+  metrics: ScenarioComparisonMetrics | null;
+  ete: {
+    ete_minutes: number;
+    ete_minutes_display: number;
+    formula: string;
+  } | null;
+  source: string | null;
+}
+
+export interface ScenarioComparison {
+  simulation_run_id: string;
+  input_sha256: string;
+  as_of: string;
+  affected_segment_id: string;
+  affected_road_name: string;
+  model: string;
+  randomness_used: false;
+  scenarios: {
+    baseline: ScenarioComparisonRow;
+    incident: ScenarioComparisonRow;
+    treatment: ScenarioComparisonRow;
+  };
+  ete_definition: string;
+}
+
+export interface ValidationSlaMeasurement {
+  incident_id: string;
+  api_ready_ms: number;
+  map_rendered_ms: number | null;
+  total_end_to_end_ms: number | null;
+}
+
+export interface SimulationResetResult {
+  status: "reset";
+  baseline_timestamp: string;
+  cleared: {
+    incidents: number;
+    notifications: number;
+    green_corridors: number;
+    custom_runs: number;
+    llm_audit_entries: number;
+  };
+  view: SimView;
 }
 
 export interface IncidentState {
   incident_id: string;
   workflow_status: string;
+  operational_status?: "IMPACT_ACTIVE" | "RESPONSE_AUTHORIZED" | "RESOLVED" | string;
+  resolved_at?: string | null;
   current_step: string;
   event: Record<string, any>;
   as_of: string;
@@ -73,23 +173,34 @@ export interface IncidentState {
     evidence: string[];
   };
   notification_id?: string;
+  performance?: {
+    routing_latency_ms?: number | null;
+    total_processing_ms: number;
+    requirement_limit_ms: number;
+    within_60_seconds: boolean;
+    measurement_scope: string;
+  };
+  simulation_run_id?: string;
+  input_sha256?: string;
   errors: string[];
 }
 
-async function post<T>(url: string, body?: unknown): Promise<T> {
+async function post<T>(url: string, body?: unknown, schema?: ZodType): Promise<T> {
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText);
-  return res.json();
+  const payload: unknown = await res.json();
+  return schema ? validatePayload<T>(schema, payload, url) : payload as T;
 }
 
-async function get<T>(url: string): Promise<T> {
+async function get<T>(url: string, schema?: ZodType): Promise<T> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(res.statusText);
-  return res.json();
+  const payload: unknown = await res.json();
+  return schema ? validatePayload<T>(schema, payload, url) : payload as T;
 }
 
 export interface Resource {
@@ -142,6 +253,7 @@ export interface GreenCorridorResult {
   priority: "EMERGENCY";
   route_segment_ids: string[];
   route_names: string[];
+  route_geometry: [number, number][];
   route_details: {
     segment_id: string; name: string; length_m: number; signal_count: number;
     baseline_speed_kmh: number; corridor_speed_kmh: number; saturation_score: number;
@@ -172,6 +284,10 @@ export interface GreenCorridorResult {
     elapsed_seconds: number; total_seconds: number; completed: boolean;
     current_intersection_id: string | null;
     active_signal_device_ids: string[]; clearance_signal_device_ids: string[];
+    vehicle_position: [number, number] | null;
+    vehicle_progress_pct: number;
+    vehicle_position_source: "simulated_from_route_geometry_and_corridor_elapsed_time";
+    next_intersection_id: string | null;
     intersection_states: { intersection_id: string; name: string; state: string; device_ids: string[];
       prepare_at_seconds: number; activate_at_seconds: number; passage_at_seconds: number; restore_at_seconds: number }[];
   };
@@ -181,13 +297,14 @@ export interface GreenCorridorResult {
 
 export const api = {
   simStart: (speed: number, start?: string) =>
-    post<SimView>("/api/simulation/start", { speed, start_timestamp: start ?? null }),
+    post<SimView>("/api/simulation/start", { speed, start_timestamp: start ?? null }, simViewSchema),
   simPause: () => post<SimView>("/api/simulation/pause"),
-  simSeek: (timestamp: string) => post<SimView>("/api/simulation/seek", { timestamp }),
-  simTick: () => post<SimView>("/api/simulation/tick"),
-  simState: () => get<SimView>("/api/simulation/state"),
+  simSeek: (timestamp: string) => post<SimView>("/api/simulation/seek", { timestamp }, simViewSchema),
+  simTick: () => post<SimView>("/api/simulation/tick", undefined, simViewSchema),
+  simState: () => get<SimView>("/api/simulation/state", simViewSchema),
+  simReset: () => post<SimulationResetResult>("/api/simulation/reset"),
   timeline: () => get<{ timestamps: string[]; markers: { index: number; time: string; kind: string | null }[] }>("/api/simulation/timeline"),
-  inject: (event_id: string) => post<IncidentState>("/api/incidents/inject", { event_id }),
+  inject: (event_id: string) => post<IncidentState>("/api/incidents/inject", { event_id }, incidentStateSchema),
   incidents: () => get<{ available: any[]; processed: string[] }>("/api/incidents"),
   whatIfNL: (question: string) => post<any>("/api/what-if/nl", { question }),
   decisionSandbox: (payload: {
@@ -197,20 +314,25 @@ export const api = {
   greenCorridor: (payload: {
     at: string; origin_segment_id: string; destination_segment_id: string;
     vehicle_type: "Ambulance" | "FireEngine"; blocked_segment_ids: string[];
-  }) => post<GreenCorridorResult>("/api/green-corridor/simulate", payload),
+  }) => post<GreenCorridorResult>("/api/green-corridor/simulate", payload, greenCorridorSchema),
   approveGreenCorridor: (scenarioId: string, approvedBy = "指揮官") =>
-    post<GreenCorridorResult>(`/api/green-corridor/${scenarioId}/approve`, { approved_by: approvedBy }),
+    post<GreenCorridorResult>(`/api/green-corridor/${scenarioId}/approve`, { approved_by: approvedBy }, greenCorridorSchema),
   greenCorridorState: (scenarioId: string, elapsedSeconds: number) =>
-    get<GreenCorridorResult["runtime_state"]>(`/api/green-corridor/${scenarioId}/state?elapsed_seconds=${elapsedSeconds}`),
+    get<GreenCorridorResult["runtime_state"]>(`/api/green-corridor/${scenarioId}/state?elapsed_seconds=${elapsedSeconds}`, runtimeStateSchema),
   roadNetwork: () => get<any[]>("/api/road-network"),
   sop: () => get<{ rule_id: number; title: string; text: string }[]>("/api/sop"),
   resources: () => get<Resource[]>("/api/resources"),
   resetResources: () => post<any>("/api/resources/reset"),
   incidentState: (id: string) => get<IncidentState>(`/api/incidents/${id}`),
+  resolveIncident: (id: string, reason: string, operator = "traffic_commander_01") =>
+    post<IncidentState>(`/api/incidents/${id}/resolve`, { reason, operator }, incidentStateSchema),
   notifications: () => get<any[]>("/api/notifications"),
   notificationOp: (id: string, op: "approve" | "dispatch" | "retry") =>
     post<any>(`/api/notifications/${id}/${op}`),
-  customIncident: (payload: any) => post<IncidentState>("/api/incidents/custom", payload),
+  customIncident: (payload: any) => {
+    const validated = validatePayload<Record<string, unknown>>(customIncidentInputSchema, payload, "自訂事件輸入");
+    return post<IncidentState>("/api/incidents/custom", validated, incidentStateSchema);
+  },
   recommendation: (incidentId: string) =>
     get<any>(`/api/incidents/${incidentId}/recommendation`),
   aiSummary: (incidentId: string) => post<any>(`/api/incidents/${incidentId}/ai-summary`),
@@ -219,7 +341,7 @@ export const api = {
   history: (until?: string) =>
     get<any>(`/api/history${until ? `?until=${encodeURIComponent(until)}` : ""}`),
   advisorChat: (question: string, history: { role: string; text: string }[] = []) =>
-    post<any>("/api/advisor/chat", { question, history }),
+    post<any>("/api/advisor/chat", { question, history }, advisorAnswerSchema),
   alertSummary: (alert: { rule_id: number; entity_id: string; sim_time?: string | null; evidence?: any; actions?: string[] }) =>
     post<{ summary: string; source: string }>("/api/alerts/summary", alert),
   confidence: () => get<any[]>("/api/confidence"),

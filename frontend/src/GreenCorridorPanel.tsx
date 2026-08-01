@@ -149,7 +149,11 @@ export default function GreenCorridorPanel({ view, result, onResult }: Props) {
             <b>{result.runtime_state.completed ? "救援車已通過走廊" : "逐路口滾動優先"}</b>
             <span>{result.runtime_state.current_intersection_id
               ? `目前路口 ${result.runtime_state.current_intersection_id}` : "等待下一路口預控"}</span>
-            <small>{result.runtime_state.elapsed_seconds}s / {result.runtime_state.total_seconds}s｜同時最多一個路口優先</small>
+            <div className="gc-vehicle-progress" aria-label={`救護車路線進度 ${result.runtime_state.vehicle_progress_pct}%`}>
+              <i style={{ width: `${result.runtime_state.vehicle_progress_pct}%` }} />
+            </div>
+            <small>🚑 進度 {result.runtime_state.vehicle_progress_pct}%｜下一路口 {result.runtime_state.next_intersection_id ?? "目的地"}</small>
+            <small>{result.runtime_state.elapsed_seconds}s / {result.runtime_state.total_seconds}s｜同時最多一個路口優先｜非 GPS</small>
           </div>}
 
           {result.approval_status === "READY_FOR_APPROVAL" ? (

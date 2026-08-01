@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import statistics
 import zipfile
 from pathlib import Path
 
@@ -53,10 +54,18 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--road-zip", type=Path, required=True)
     parser.add_argument("--signals-csv", type=Path, required=True)
+    parser.add_argument(
+        "--organizer-network", type=Path,
+        default=Path("data/raw/road_network_geometry.json"),
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
     controls = read_signal_controls(args.signals_csv)
+    organizer_names = {
+        row["segment_id"]: row["name"]
+        for row in json.loads(args.organizer_network.read_text(encoding="utf-8"))
+    }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     # Only the DBF is needed. Reading that member explicitly avoids inheriting
     # directory permissions stored in the ZIP and works in restricted builds.
@@ -66,15 +75,24 @@ def main() -> None:
 
     features = []
     for segment_id, spec in SEGMENTS.items():
-        points = []
-        road_ids = []
+        road_records = []
         for row in rows:
             if row.get("roadname") not in spec["names"]:
                 continue
             point = twd97_to_wgs84(float(row["point_x"]), float(row["point_y"]))
             if in_bounds(point, spec["bounds"]):
-                points.append(point)
-                road_ids.append(row.get("road_id", ""))
+                road_records.append((point, row.get("road_id", "")))
+        # Official road-block polygons occasionally include a side ramp with
+        # the same road name.  For the challenge's east-west centerlines,
+        # discard label points over ~45 m away from the median road axis.
+        if spec["axis"] == 0 and road_records:
+            median_lat = statistics.median(point[0][1] for point in road_records)
+            road_records = [
+                record for record in road_records
+                if abs(record[0][1] - median_lat) <= 0.00042
+            ]
+        points = [point for point, _ in road_records]
+        road_ids = [road_id for _, road_id in road_records]
         for device_id in spec["controls"]:
             if device_id not in controls:
                 raise ValueError(f"Missing official signal control point: {device_id}")
@@ -89,6 +107,7 @@ def main() -> None:
             "id": segment_id,
             "properties": {
                 "segment_id": segment_id,
+                "name": organizer_names[segment_id],
                 "source_road_names": list(spec["names"]),
                 "source_road_ids": sorted(set(road_ids)),
                 "geometry_source": "臺北市政府工務局新建工程處",

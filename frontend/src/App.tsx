@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type IncidentState, type SimView } from "./api";
+import { api, type IncidentState, type SimView, type ValidationSlaMeasurement } from "./api";
 import Cockpit from "./Cockpit";
 import RecommendationView from "./RecommendationView";
 import GlobeIntro from "./GlobeIntro";
@@ -27,7 +27,10 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(new Date());
   const [resourceKey, setResourceKey] = useState(0);
+  const [simulationGeneration, setSimulationGeneration] = useState(0);
+  const [validationSla, setValidationSla] = useState<ValidationSlaMeasurement | null>(null);
   const playingRef = useRef(false);
+  const validationStartedRef = useRef<number | null>(null);
 
   useEffect(() => {
     api.incidents().then((r) => setAvailable(r.available)).catch(() => {});
@@ -59,17 +62,60 @@ export default function App() {
     setView(await api.simSeek("2026-05-20 21:00"));
   }, []);
 
+  const resetSimulation = useCallback(async () => {
+    if (!window.confirm("將清除目前事件、調度、通報與救援走廊，並回到 21:00 基準。確定重新開始？")) return;
+    setBusy(true);
+    playingRef.current = false;
+    try {
+      const result = await api.simReset();
+      setView(result.view);
+      setIncident(null);
+      setValidationSla(null);
+      validationStartedRef.current = null;
+      setResourceKey((k) => k + 1);
+      setSimulationGeneration((k) => k + 1);
+    } catch (error) {
+      window.alert(`重新開始失敗：${error instanceof Error ? error.message : "未知錯誤"}`);
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
   const inject = useCallback(async (id: string) => {
     setBusy(true);
+    const started = performance.now();
+    validationStartedRef.current = started;
+    setValidationSla(null);
     try {
       const state = await api.inject(id);
       setIncident(state);
       setResourceKey((k) => k + 1); // 資源已被調度，刷新庫存
       // 事件時間點同步跳轉，讓地圖顏色與事件一致
-      setView(await api.simSeek(state.event.timestamp));
+      const nextView = await api.simSeek(state.event.timestamp);
+      setView(nextView);
+      setValidationSla({
+        incident_id: state.incident_id,
+        api_ready_ms: Math.round((performance.now() - started) * 100) / 100,
+        map_rendered_ms: null,
+        total_end_to_end_ms: null,
+      });
     } finally {
       setBusy(false);
     }
+  }, []);
+
+  const markScenarioRendered = useCallback((incidentId: string) => {
+    const started = validationStartedRef.current;
+    if (started == null) return;
+    setValidationSla((current) => {
+      if (!current || current.incident_id !== incidentId || current.total_end_to_end_ms != null) return current;
+      const total = Math.round((performance.now() - started) * 100) / 100;
+      return {
+        ...current,
+        map_rendered_ms: Math.max(0, Math.round((total - current.api_ready_ms) * 100) / 100),
+        total_end_to_end_ms: total,
+      };
+    });
   }, []);
 
   const refreshIncident = useCallback(async () => {
@@ -104,6 +150,7 @@ export default function App() {
             <button className="primary" onClick={start}>▶ 播放</button>
           )}
           <button onClick={seekPreIncident}>⏭ 跳至事件前 (21:00)</button>
+          <button className="reset-simulation" disabled={busy} onClick={resetSimulation}>↺ 重新開始模擬</button>
           {view?.progress && (
             <span className="dim">{view.progress.index + 1}/{view.progress.total}</span>
           )}
@@ -117,9 +164,14 @@ export default function App() {
           available={available}
           busy={busy}
           resourceKey={resourceKey}
+          simulationGeneration={simulationGeneration}
+          validationSla={validationSla}
+          onScenarioRendered={markScenarioRendered}
           onInject={inject}
           onInjectedCustom={(state) => {
             setIncident(state);
+            setValidationSla(null);
+            validationStartedRef.current = null;
             setResourceKey((k) => k + 1);
             api.simSeek(state.event.timestamp).then(setView).catch(() => {});
           }}

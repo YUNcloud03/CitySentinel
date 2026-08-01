@@ -5,12 +5,18 @@ import type { GreenCorridorResult, IncidentState, SimView } from "./api";
 import officialRoadGeometry from "./data/roads.json";
 import {
   INCIDENT_COORDS,
-  MAP_CENTER,
-  MAP_ZOOM,
   STATION_COORDS,
 } from "./geometry";
+import {
+  distanceMeters,
+  h3ResolutionForZoom,
+  incidentImpactGeoJSON,
+  lineMidpointCoordinate,
+  riskGridGeoJSON,
+} from "./geoAnalytics";
 
-type AssetLayer = "crosswalks" | "signals" | "cms";
+type AssetLayer = "crosswalks" | "signals" | "cms" | "hospitals" | "risk";
+export type ComparisonMode = "baseline" | "event" | "current";
 
 function escapeHtml(value: unknown) {
   return String(value ?? "")
@@ -42,9 +48,48 @@ type OfficialSignalFeature = {
 };
 
 type OfficialRoadFeature = {
-  properties: { segment_id: string };
+  properties: { segment_id: string; name: string };
   geometry: { type: "LineString"; coordinates: [number, number][] };
 };
+
+const OFFICIAL_ROADS = officialRoadGeometry.features as unknown as OfficialRoadFeature[];
+
+function organizerRoadBounds(): [[number, number], [number, number]] {
+  const coordinates = OFFICIAL_ROADS.flatMap((feature) => feature.geometry.coordinates);
+  return [
+    [Math.min(...coordinates.map(([lng]) => lng)), Math.min(...coordinates.map(([, lat]) => lat))],
+    [Math.max(...coordinates.map(([lng]) => lng)), Math.max(...coordinates.map(([, lat]) => lat))],
+  ];
+}
+
+const ORGANIZER_ROAD_BOUNDS = organizerRoadBounds();
+const ORGANIZER_OVERVIEW_OPTIONS: maplibregl.FitBoundsOptions = {
+  padding: { top: 64, right: 64, bottom: 142, left: 64 },
+  maxZoom: 13.1,
+  animate: false,
+};
+
+function fitOrganizerRoadOverview(map: maplibregl.Map, animate = false) {
+  map.fitBounds(ORGANIZER_ROAD_BOUNDS, {
+    ...ORGANIZER_OVERVIEW_OPTIONS,
+    animate,
+    duration: animate ? 550 : 0,
+  });
+}
+
+type HospitalFeature = {
+  properties: { name: string; address: string; source: string; source_url?: string };
+  geometry: { type: "Point"; coordinates: [number, number] };
+};
+
+function coordinateForIncident(incident: IncidentState | null): [number, number] | null {
+  if (!incident) return null;
+  const known = INCIDENT_COORDS[incident.incident_id];
+  if (known) return known;
+  const segmentId = String(incident.event.affected_segment ?? "");
+  const road = OFFICIAL_ROADS.find((feature) => feature.properties.segment_id === segmentId);
+  return road ? lineMidpointCoordinate(road.geometry.coordinates) : null;
+}
 
 const BASE_STYLE: maplibregl.StyleSpecification = {
   version: 8,
@@ -69,8 +114,9 @@ function roadsGeoJSON(
   projectedTraffic?: Record<string, any> | null,
   selectedSegmentId?: string | null,
   greenCorridor?: GreenCorridorResult | null,
+  comparisonMode: ComparisonMode = "current",
 ) {
-  const routing = incident?.routing_result;
+  const routing = view?.simulation_context?.dynamic_routing ?? incident?.routing_result;
   const primaryId = routing?.primary_route?.segment_id;
   const secondaryIds = new Set<string>(
     (routing?.secondary_routes ?? []).map((s: any) => s.segment_id)
@@ -81,9 +127,27 @@ function roadsGeoJSON(
 
   return {
     type: "FeatureCollection" as const,
-    features: (officialRoadGeometry.features as unknown as OfficialRoadFeature[]).map((road) => {
+    features: OFFICIAL_ROADS.map((road) => {
       const segId = road.properties.segment_id;
-      const t = projectedTraffic?.[segId] ?? view?.traffic?.[segId];
+      const source = projectedTraffic?.[segId] ?? view?.traffic?.[segId];
+      const t = source && comparisonMode === "baseline"
+        ? {
+            ...source,
+            avg_speed: source.baseline_avg_speed ?? source.avg_speed,
+            vehicle_count: source.baseline_vehicle_count ?? source.vehicle_count,
+            saturation_score: source.baseline_saturation_score ?? source.saturation_score,
+          }
+        : source && comparisonMode === "event"
+          ? {
+              ...source,
+              avg_speed: source.event_avg_speed ?? source.avg_speed,
+              vehicle_count: source.event_vehicle_count ?? source.vehicle_count,
+              saturation_score: source.event_saturation_score ?? source.saturation_score,
+            }
+          : source;
+      const saturation = t?.saturation_score ?? -1;
+      const displayLevel = saturation >= .95 ? "A" : saturation >= .85 ? "B" : saturation >= 0 ? "Normal" : "NoData";
+      const comparisonChanged = source?.event_saturation_score != null;
       let role = "none";
       if (segId === closedId) role = "closed";
       else if (segId === primaryId) role = "primary";
@@ -92,16 +156,24 @@ function roadsGeoJSON(
         type: "Feature" as const,
         properties: {
           segment_id: segId,
-          name: t?.road_name ?? segId,
+          name: t?.road_name ?? road.properties.name,
           sat: t?.saturation_score ?? -1,
-          level: t?.congestion_level ?? "NoData",
+          level: displayLevel,
           speed: t?.avg_speed ?? null,
+          baseline_speed: t?.baseline_avg_speed ?? null,
+          baseline_sat: t?.baseline_saturation_score ?? null,
+          event_speed: source?.event_avg_speed ?? null,
+          event_sat: source?.event_saturation_score ?? null,
+          current_speed: source?.avg_speed ?? null,
           role,
           selected: segId === selectedSegmentId,
-          simulated: Boolean(projectedTraffic?.[segId]),
+          simulated: Boolean(projectedTraffic?.[segId]) || t?.simulation_source === "incident_projection",
           corridor: corridorIds.has(segId),
           corridor_approved: greenCorridor?.approval_status === "APPROVED_FOR_SIMULATION" && corridorIds.has(segId),
           corridor_blocked: corridorBlockedIds.has(segId),
+          comparison_mode: comparisonMode,
+          comparison_changed: comparisonChanged,
+          comparison_active: Boolean(view?.simulation_context?.active),
         },
         geometry: road.geometry,
       };
@@ -131,7 +203,7 @@ function stationsGeoJSON(view: SimView | null) {
 
 function incidentGeoJSON(incident: IncidentState | null) {
   if (!incident) return { type: "FeatureCollection" as const, features: [] };
-  const coord = INCIDENT_COORDS[incident.incident_id];
+  const coord = coordinateForIncident(incident);
   if (!coord) return { type: "FeatureCollection" as const, features: [] };
   return {
     type: "FeatureCollection" as const,
@@ -145,6 +217,19 @@ function incidentGeoJSON(incident: IncidentState | null) {
   };
 }
 
+function corridorGeoJSON(greenCorridor?: GreenCorridorResult | null) {
+  return {
+    type: "FeatureCollection" as const,
+    features: greenCorridor?.route_geometry?.length
+      ? [{
+          type: "Feature" as const,
+          properties: { approved: greenCorridor.approval_status === "APPROVED_FOR_SIMULATION" },
+          geometry: { type: "LineString" as const, coordinates: greenCorridor.route_geometry },
+        }]
+      : [],
+  };
+}
+
 export default function MapView({
   view,
   incident,
@@ -152,6 +237,9 @@ export default function MapView({
   greenCorridor,
   selectedSegmentId,
   onSelectSegment,
+  comparisonMode: controlledComparisonMode,
+  onComparisonModeChange,
+  onScenarioRendered,
 }: {
   view: SimView | null;
   incident: IncidentState | null;
@@ -159,20 +247,39 @@ export default function MapView({
   greenCorridor?: GreenCorridorResult | null;
   selectedSegmentId?: string | null;
   onSelectSegment?: (segmentId: string) => void;
+  comparisonMode?: ComparisonMode;
+  onComparisonModeChange?: (mode: ComparisonMode) => void;
+  onScenarioRendered?: (incidentId: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
+  const viewRef = useRef(view);
+  viewRef.current = view;
   const readyRef = useRef(false);
   const markerRef = useRef<maplibregl.Marker | null>(null);
   const markerIncidentRef = useRef<string | null>(null);
+  const ambulanceMarkerRef = useRef<maplibregl.Marker | null>(null);
   const signalMarkersRef = useRef<{ marker: maplibregl.Marker; element: HTMLButtonElement; offset: number; deviceId: string }[]>([]);
+  const hospitalMarkersRef = useRef<{ marker: maplibregl.Marker; element: HTMLButtonElement }[]>([]);
+  const renderedIncidentRef = useRef<string | null>(null);
+  const scenarioRenderedCallbackRef = useRef(onScenarioRendered);
+  scenarioRenderedCallbackRef.current = onScenarioRendered;
   const selectRef = useRef(onSelectSegment);
   selectRef.current = onSelectSegment;
   const [assetLayers, setAssetLayers] = useState<Record<AssetLayer, boolean>>({
-    crosswalks: true,
+    crosswalks: false,
     signals: true,
-    cms: true,
+    cms: false,
+    hospitals: false,
+    risk: false,
   });
+  const [localComparisonMode, setLocalComparisonMode] = useState<ComparisonMode>("current");
+  const comparisonMode = controlledComparisonMode ?? localComparisonMode;
+  const setComparisonMode = (mode: ComparisonMode) => {
+    setLocalComparisonMode(mode);
+    onComparisonModeChange?.(mode);
+  };
+  const [layersCollapsed, setLayersCollapsed] = useState(true);
   const assetLayersRef = useRef(assetLayers);
   assetLayersRef.current = assetLayers;
   const [signalCount, setSignalCount] = useState(0);
@@ -183,18 +290,76 @@ export default function MapView({
     const map = new maplibregl.Map({
       container: containerRef.current,
       style: BASE_STYLE,
-      center: MAP_CENTER,
-      zoom: MAP_ZOOM,
+      bounds: ORGANIZER_ROAD_BOUNDS,
+      fitBoundsOptions: ORGANIZER_OVERVIEW_OPTIONS,
       attributionControl: { compact: true },
     });
+    map.scrollZoom.enable();
+    map.doubleClickZoom.enable();
+    map.dragPan.enable();
+    map.touchZoomRotate.enable();
+    map.dragRotate.disable();
+    map.touchZoomRotate.disableRotation();
+    map.addControl(new maplibregl.NavigationControl({ showCompass: false, visualizePitch: false }), "bottom-right");
     mapRef.current = map;
 
     map.on("load", () => {
+      window.requestAnimationFrame(() => {
+        if (disposed) return;
+        map.resize();
+        fitOrganizerRoadOverview(map);
+      });
       map.addSource("roads", { type: "geojson", data: roadsGeoJSON(null, null) });
+      map.addSource("corridor-route", { type: "geojson", data: corridorGeoJSON(null) });
       map.addSource("stations", { type: "geojson", data: stationsGeoJSON(null) });
       map.addSource("incident", { type: "geojson", data: incidentGeoJSON(null) });
+      map.addSource("incident-impact", { type: "geojson", data: incidentImpactGeoJSON(null) });
+      map.addSource("risk-grid", {
+        type: "geojson",
+        data: riskGridGeoJSON(
+          viewRef.current,
+          OFFICIAL_ROADS,
+          STATION_COORDS,
+          h3ResolutionForZoom(map.getZoom()),
+        ),
+      });
       map.addSource("crosswalks", { type: "geojson", data: "/data/crosswalks.geojson" });
       map.addSource("cms-assets", { type: "geojson", data: "/data/cms.geojson" });
+
+      map.addLayer({
+        id: "risk-grid-fill",
+        type: "fill",
+        source: "risk-grid",
+        minzoom: 10,
+        maxzoom: 17,
+        layout: { visibility: "none" },
+        paint: {
+          "fill-color": ["interpolate", ["linear"], ["get", "risk"],
+            0, "#17344f", .7, "#f5a623", .9, "#e5484d", 1, "#ff1738"],
+          "fill-opacity": ["interpolate", ["linear"], ["zoom"], 10, .12, 14, .28, 17, .08],
+        },
+      });
+      map.addLayer({
+        id: "risk-grid-line",
+        type: "line",
+        source: "risk-grid",
+        minzoom: 10,
+        maxzoom: 17,
+        layout: { visibility: "none" },
+        paint: { "line-color": "#7bb7e8", "line-width": 1, "line-opacity": .28 },
+      });
+      map.addLayer({
+        id: "incident-impact-fill",
+        type: "fill",
+        source: "incident-impact",
+        paint: { "fill-color": "#e5484d", "fill-opacity": .1 },
+      });
+      map.addLayer({
+        id: "incident-impact-line",
+        type: "line",
+        source: "incident-impact",
+        paint: { "line-color": "#ff6b72", "line-width": 2, "line-dasharray": [2, 1.5], "line-opacity": .75 },
+      });
 
       // 臺北市交工處行穿線：以官方 Polygon 呈現，縮放至街廓層級才顯示細節。
       map.addLayer({
@@ -202,6 +367,7 @@ export default function MapView({
         type: "fill",
         source: "crosswalks",
         minzoom: 14,
+        layout: { visibility: "none" },
         paint: {
           "fill-color": ["case", ["==", ["get", "kind"], "斑馬紋"], "#ffffff", "#d8dee9"],
           "fill-opacity": ["interpolate", ["linear"], ["zoom"], 14, 0.38, 16, 0.82],
@@ -216,13 +382,30 @@ export default function MapView({
         source: "roads",
         layout: { "line-cap": "round", "line-join": "round" },
         paint: {
-          "line-width": 4.5,
+          "line-width": ["interpolate", ["linear"], ["zoom"], 10, 7, 13.1, 6, 16, 5],
           "line-color": [
             "case",
             ["<", ["get", "sat"], 0], "#333943",
             ["step", ["get", "sat"], "#2fbf71", 0.85, "#f5a623", 0.95, "#e5484d"],
           ],
-          "line-opacity": 0.9,
+          "line-opacity": ["case",
+            ["!", ["get", "comparison_active"]], .9,
+            ["get", "comparison_changed"], .95,
+            .28,
+          ],
+        },
+      });
+      map.addLayer({
+        id: "incident-projection-outline",
+        type: "line",
+        source: "roads",
+        filter: ["==", ["get", "simulated"], true],
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          "line-width": 10,
+          "line-color": "#ff9f43",
+          "line-opacity": 0.2,
+          "line-dasharray": [1.4, 1],
         },
       });
       map.addLayer({
@@ -236,28 +419,27 @@ export default function MapView({
       map.addLayer({
         id: "green-corridor-glow",
         type: "line",
-        source: "roads",
-        filter: ["==", ["get", "corridor"], true],
+        source: "corridor-route",
         layout: { "line-cap": "round", "line-join": "round" },
         paint: {
           "line-width": 15,
-          "line-color": ["case", ["==", ["get", "corridor_approved"], true], "#00f5a0", "#f5a623"],
+          "line-color": ["case", ["==", ["get", "approved"], true], "#00f5a0", "#f5a623"],
           "line-opacity": 0.18,
         },
       });
       map.addLayer({
         id: "green-corridor-route",
         type: "line",
-        source: "roads",
-        filter: ["==", ["get", "corridor_approved"], true],
+        source: "corridor-route",
+        filter: ["==", ["get", "approved"], true],
         layout: { "line-cap": "round", "line-join": "round" },
         paint: { "line-width": 6, "line-color": "#00f5a0", "line-opacity": 0.98 },
       });
       map.addLayer({
         id: "green-corridor-proposal",
         type: "line",
-        source: "roads",
-        filter: ["all", ["==", ["get", "corridor"], true], ["==", ["get", "corridor_approved"], false]],
+        source: "corridor-route",
+        filter: ["==", ["get", "approved"], false],
         paint: { "line-width": 5, "line-color": "#f5a623", "line-opacity": 0.9, "line-dasharray": [2, 1.5] },
       });
       map.addLayer({
@@ -326,6 +508,7 @@ export default function MapView({
         type: "circle",
         source: "cms-assets",
         minzoom: 13,
+        layout: { visibility: "none" },
         paint: {
           "circle-radius": 9,
           "circle-color": "rgba(245, 166, 35, 0.16)",
@@ -338,6 +521,7 @@ export default function MapView({
         type: "circle",
         source: "cms-assets",
         minzoom: 13,
+        layout: { visibility: "none" },
         paint: {
           "circle-radius": 3.5,
           "circle-color": "#f5a623",
@@ -389,6 +573,36 @@ export default function MapView({
         .catch((error) => {
           if (!disposed) console.error("無法載入官方號誌點位", error);
         });
+      void fetch("/data/hospitals.geojson")
+        .then((response) => {
+          if (!response.ok) throw new Error(`hospitals.geojson ${response.status}`);
+          return response.json();
+        })
+        .then((collection: { features?: HospitalFeature[] }) => {
+          if (disposed) return;
+          hospitalMarkersRef.current = (collection.features ?? []).map((hospital) => {
+            const { name, address, source, source_url: sourceUrl } = hospital.properties;
+            const element = document.createElement("button");
+            element.type = "button";
+            element.hidden = !assetLayersRef.current.hospitals;
+            element.className = "hospital-map-marker";
+            element.setAttribute("aria-label", `${name}，醫院`);
+            element.innerHTML = `<span aria-hidden="true">✚</span>`;
+            const sourceLink = sourceUrl
+              ? `<br/><a href="${escapeHtml(sourceUrl)}" target="_blank" rel="noreferrer">查看官方院區資料</a>`
+              : "";
+            const marker = new maplibregl.Marker({ element, anchor: "center" })
+              .setLngLat(hospital.geometry.coordinates)
+              .setPopup(new maplibregl.Popup({ offset: 20 }).setHTML(
+                `<b>${escapeHtml(name)}</b><br/>${escapeHtml(address)}<br/>點位來源：${escapeHtml(source)}${sourceLink}`
+              ))
+              .addTo(map);
+            return { marker, element };
+          });
+        })
+        .catch((error) => {
+          if (!disposed) console.error("無法載入官方醫院點位", error);
+        });
       // 事故點改用 HTML pulse marker（CSS 擴散動畫），此 source 保留供未來擴充
 
       const popup = new maplibregl.Popup({ closeButton: false, closeOnClick: false });
@@ -397,9 +611,14 @@ export default function MapView({
         if (!p) return;
         map.getCanvas().style.cursor = "pointer";
         const sat = Number(p.sat) >= 0 ? Number(p.sat).toFixed(2) : "無資料";
+        const modeLabel = p.comparison_mode === "baseline" ? "基準情境"
+          : p.comparison_mode === "event" ? "障礙發生（未處置）" : "目前處置結果";
+        const projection = p.simulated
+          ? `<br/><span style="color:#ffbd72">${modeLabel}</span>${p.baseline_speed != null && p.event_speed != null ? `｜基準 ${p.baseline_speed} → 障礙 ${p.event_speed} → 目前 ${p.current_speed} km/h` : ""}`
+          : "<br/>主辦方資料快照";
         popup
           .setLngLat(e.lngLat)
-          .setHTML(`<b>${p.name}</b><br/>飽和度 ${sat}｜等級 ${p.level}${p.speed != null ? `｜${p.speed} km/h` : ""}`)
+          .setHTML(`<b>${escapeHtml(p.name)}</b><br/>飽和度 ${sat}｜等級 ${escapeHtml(p.level)}${p.speed != null ? `｜${escapeHtml(p.speed)} km/h` : ""}${projection}`)
           .addTo(map);
       });
       map.on("mouseleave", "roads-base", () => {
@@ -443,6 +662,37 @@ export default function MapView({
         map.getCanvas().style.cursor = "";
         popup.remove();
       });
+      map.on("mousemove", "risk-grid-fill", (e) => {
+        const p = e.features?.[0]?.properties;
+        if (!p) return;
+        map.getCanvas().style.cursor = "help";
+        popup.setLngLat(e.lngLat).setHTML(
+          `<b>H3 風險格｜${escapeHtml(p.level)}風險</b><br/>分數 ${Number(p.risk).toFixed(2)}｜解析度 ${escapeHtml(p.h3_resolution)}<br/>道路 ${escapeHtml(p.traffic_entities) || "—"}<br/>基地台 ${escapeHtml(p.crowd_entities) || "—"}`
+        ).addTo(map);
+      });
+      map.on("mouseleave", "risk-grid-fill", () => {
+        map.getCanvas().style.cursor = "";
+        popup.remove();
+      });
+      map.on("mousemove", "incident-impact-fill", (e) => {
+        const p = e.features?.[0]?.properties;
+        if (!p) return;
+        popup.setLngLat(e.lngLat).setHTML(
+          `<b>事件推播影響範圍</b><br/>半徑 ${escapeHtml(p.radius_m)} 公尺｜${escapeHtml(p.severity)}<br/>依事件座標以 Turf 計算`
+        ).addTo(map);
+      });
+      map.on("mouseleave", "incident-impact-fill", () => popup.remove());
+
+      map.on("zoomend", () => {
+        (map.getSource("risk-grid") as maplibregl.GeoJSONSource)?.setData(
+          riskGridGeoJSON(
+            viewRef.current,
+            OFFICIAL_ROADS,
+            STATION_COORDS,
+            h3ResolutionForZoom(map.getZoom()),
+          )
+        );
+      });
 
       readyRef.current = true;
     });
@@ -452,6 +702,10 @@ export default function MapView({
       readyRef.current = false;
       signalMarkersRef.current.forEach(({ marker }) => marker.remove());
       signalMarkersRef.current = [];
+      hospitalMarkersRef.current.forEach(({ marker }) => marker.remove());
+      hospitalMarkersRef.current = [];
+      ambulanceMarkerRef.current?.remove();
+      ambulanceMarkerRef.current = null;
       map.remove();
     };
   }, []);
@@ -483,8 +737,43 @@ export default function MapView({
           ? "官方號誌點位；救援走廊優先綠燈提案（待核准）"
           : `官方號誌點位；模擬${state.label}，剩餘 ${state.remaining} 秒`;
     });
+    const vehiclePosition = greenCorridor?.runtime_state?.vehicle_position;
+    if (corridorApproved && vehiclePosition) {
+      const runtime = greenCorridor.runtime_state;
+      if (!ambulanceMarkerRef.current) {
+        const element = document.createElement("button");
+        element.type = "button";
+        element.className = "ambulance-map-marker";
+        element.setAttribute("aria-label", "救護車模擬位置");
+        element.innerHTML = `
+          <span class="ambulance-pulse" aria-hidden="true"></span>
+          <span class="ambulance-symbol" aria-hidden="true">🚑</span>
+          <span class="ambulance-label">模擬定位</span>`;
+        ambulanceMarkerRef.current = new maplibregl.Marker({ element, anchor: "center" })
+          .setLngLat(vehiclePosition)
+          .addTo(map);
+      }
+      const nextLabel = runtime.next_intersection_id ?? "目的地";
+      const statusLabel = runtime.completed ? "已抵達" : `前往 ${nextLabel}`;
+      const nextSignal = greenCorridor.signal_actions.find(
+        (action) => action.intersection_id === runtime.next_intersection_id
+      );
+      const nextDistance = nextSignal ? distanceMeters(vehiclePosition, nextSignal.coordinates) : null;
+      ambulanceMarkerRef.current
+        .setLngLat(vehiclePosition)
+        .setPopup(new maplibregl.Popup({ offset: 28 }).setHTML(
+          `<b>救護車｜${escapeHtml(statusLabel)}</b><br/>路線進度 ${runtime.vehicle_progress_pct}%${nextDistance != null ? `<br/>距下一路口約 ${nextDistance} 公尺（Turf）` : ""}<br/>定位來源：走廊路徑與模擬時間推算（非 GPS）`
+        ));
+      const element = ambulanceMarkerRef.current.getElement();
+      element.classList.toggle("arrived", runtime.completed);
+      element.setAttribute("aria-label", `救護車模擬定位，進度 ${runtime.vehicle_progress_pct}%，${statusLabel}`);
+      element.title = `救護車模擬定位｜進度 ${runtime.vehicle_progress_pct}%｜${statusLabel}`;
+    } else {
+      ambulanceMarkerRef.current?.remove();
+      ambulanceMarkerRef.current = null;
+    }
     // 事件擴散 pulse marker（DOM overlay，不需等 style load）
-    const coord = incident ? INCIDENT_COORDS[incident.incident_id] : null;
+    const coord = coordinateForIncident(incident);
     const incidentId = incident?.incident_id ?? null;
     if (markerIncidentRef.current !== incidentId) {
       markerRef.current?.remove();
@@ -500,7 +789,10 @@ export default function MapView({
     }
     if (!readyRef.current) return;
     (map.getSource("roads") as maplibregl.GeoJSONSource)?.setData(
-      roadsGeoJSON(view, incident, projectedTraffic, selectedSegmentId, greenCorridor)
+      roadsGeoJSON(view, incident, projectedTraffic, selectedSegmentId, greenCorridor, comparisonMode)
+    );
+    (map.getSource("corridor-route") as maplibregl.GeoJSONSource)?.setData(
+      corridorGeoJSON(greenCorridor)
     );
     (map.getSource("stations") as maplibregl.GeoJSONSource)?.setData(
       stationsGeoJSON(view)
@@ -508,7 +800,26 @@ export default function MapView({
     (map.getSource("incident") as maplibregl.GeoJSONSource)?.setData(
       incidentGeoJSON(incident)
     );
-  }, [view, incident, projectedTraffic, greenCorridor, selectedSegmentId, signalCount]);
+    (map.getSource("incident-impact") as maplibregl.GeoJSONSource)?.setData(
+      incidentImpactGeoJSON(incident, coordinateForIncident(incident))
+    );
+    (map.getSource("risk-grid") as maplibregl.GeoJSONSource)?.setData(
+      riskGridGeoJSON(
+        view,
+        OFFICIAL_ROADS,
+        STATION_COORDS,
+        h3ResolutionForZoom(map.getZoom()),
+      )
+    );
+    const activeIncidentId = view?.simulation_context?.active
+      ? view.simulation_context.incident_id ?? null : null;
+    if (!activeIncidentId) {
+      renderedIncidentRef.current = null;
+    } else if (renderedIncidentRef.current !== activeIncidentId) {
+      renderedIncidentRef.current = activeIncidentId;
+      map.once("render", () => scenarioRenderedCallbackRef.current?.(activeIncidentId));
+    }
+  }, [view, incident, projectedTraffic, greenCorridor, selectedSegmentId, signalCount, comparisonMode]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -516,7 +827,9 @@ export default function MapView({
     const visibility = (visible: boolean) => visible ? "visible" : "none";
     ["crosswalk-fill"].forEach((id) => map.getLayer(id) && map.setLayoutProperty(id, "visibility", visibility(assetLayers.crosswalks)));
     ["cms-halo", "cms-core"].forEach((id) => map.getLayer(id) && map.setLayoutProperty(id, "visibility", visibility(assetLayers.cms)));
+    ["risk-grid-fill", "risk-grid-line"].forEach((id) => map.getLayer(id) && map.setLayoutProperty(id, "visibility", visibility(assetLayers.risk)));
     signalMarkersRef.current.forEach(({ element }) => { element.hidden = !assetLayers.signals; });
+    hospitalMarkersRef.current.forEach(({ element }) => { element.hidden = !assetLayers.hospitals; });
   }, [assetLayers]);
 
   const toggleAssetLayer = (layer: AssetLayer) => {
@@ -526,11 +839,39 @@ export default function MapView({
   return (
     <div className="map-wrap">
       <div ref={containerRef} className="map" />
+      <button type="button" className="map-scope-badge"
+        aria-label="返回主辦方十五條路段完整總覽"
+        onClick={() => mapRef.current && fitOrganizerRoadOverview(mapRef.current, true)}>
+        15/15 路段總覽
+      </button>
       {onSelectSegment && !selectedSegmentId && (
         <div className="map-pick-hint">點選路段，建立人工決策方案</div>
       )}
-      {projectedTraffic && (
-        <div className="map-sim-badge"><span />方案推演結果｜非正式狀態</div>
+      {(projectedTraffic || view?.simulation_context?.active) && (
+        <div className={`map-sim-badge ${view?.simulation_context?.active ? "incident" : ""} ${view?.simulation_context?.response_phase === "CLEARANCE_ACTIVE" ? "clearance" : ""}`}>
+          <span />{view?.simulation_context?.active
+            ? view.simulation_context.response_phase === "CLEARANCE_ACTIVE"
+              ? `疏通處理中｜恢復 ${Math.round((view.simulation_context.mitigation_progress ?? 0) * 100)}%｜已核准 ${view.simulation_context.accepted_action_ids?.length ?? 0} 項決策`
+              : view.simulation_context.response_phase === "DISPATCHING"
+                ? `資源前往現場｜已核准 ${view.simulation_context.accepted_action_ids?.length ?? 0} 項｜尚未開始改善`
+              : view.simulation_context.response_phase === "CLEARED"
+                ? "模擬疏通完成｜等待現場確認結案"
+                : `障礙已發生｜等待決策核准${view.simulation_context.review_overdue ? "｜狀態逾時待複核" : ""}`
+            : "方案推演結果｜非正式狀態"}
+        </div>
+      )}
+      {view?.simulation_context?.active && (
+        <div className="scenario-compare" role="group" aria-label="情境比較模式">
+          <span>同時間比較</span>
+          <button className={comparisonMode === "baseline" ? "active" : ""}
+            onClick={() => setComparisonMode("baseline")}>① 基準</button>
+          <button className={comparisonMode === "event" ? "active" : ""}
+            onClick={() => setComparisonMode("event")}>② 障礙發生</button>
+          <button className={comparisonMode === "current" ? "active" : ""}
+            disabled={!view.scenario_comparison?.scenarios.treatment.available}
+            title={view.scenario_comparison?.scenarios.treatment.locked_reason ?? undefined}
+            onClick={() => setComparisonMode("current")}>③ 目前處置</button>
+        </div>
       )}
       {greenCorridor && (
         <div className={`map-corridor-badge ${greenCorridor.approval_status === "APPROVED_FOR_SIMULATION" ? "approved" : "pending"}`}>
@@ -538,7 +879,12 @@ export default function MapView({
           {greenCorridor.approval_status === "APPROVED_FOR_SIMULATION" ? "模擬啟動" : "待核准"}
         </div>
       )}
-      <div className="asset-layer-control" role="group" aria-label="交通設施圖層">
+      <div className={`asset-layer-control ${layersCollapsed ? "collapsed" : ""}`} role="group" aria-label="交通設施圖層">
+        <button type="button" className="asset-layer-collapse" aria-expanded={!layersCollapsed}
+          onClick={() => setLayersCollapsed((value) => !value)}>
+          {layersCollapsed ? "圖層 ▴" : "收合 ▾"}
+        </button>
+        {!layersCollapsed && <>
         <button className={assetLayers.crosswalks ? "active" : ""} aria-pressed={assetLayers.crosswalks}
           onClick={() => toggleAssetLayer("crosswalks")}>
           <i className="crosswalk-mini" aria-hidden="true" /><span><b>行穿線</b><small>官方 19,643</small></span>
@@ -551,6 +897,15 @@ export default function MapView({
           onClick={() => toggleAssetLayer("cms")}>
           <i className="cms-mini" aria-hidden="true">CMS</i><span><b>資訊看板</b><small>官方 178</small></span>
         </button>
+        <button className={assetLayers.hospitals ? "active" : ""} aria-pressed={assetLayers.hospitals}
+          onClick={() => toggleAssetLayer("hospitals")}>
+          <i className="hospital-mini" aria-hidden="true">✚</i><span><b>醫院</b><small>官方 11</small></span>
+        </button>
+        <button className={assetLayers.risk ? "active" : ""} aria-pressed={assetLayers.risk}
+          onClick={() => toggleAssetLayer("risk")}>
+          <i className="risk-mini" aria-hidden="true">⬡</i><span><b>H3 風險格</b><small>即時計算</small></span>
+        </button>
+        </>}
       </div>
       <div className="map-legend">
         <span><i className="sw" style={{ background: "#2fbf71" }} /> 正常</span>

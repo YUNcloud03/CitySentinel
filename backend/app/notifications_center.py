@@ -57,6 +57,12 @@ class NotificationCenter:
         self._store: dict[str, dict] = {}
         self._seq = 0
 
+    def reset(self) -> None:
+        """Clear one simulation run without replacing shared object references."""
+        self._store.clear()
+        self._seq = 0
+        self.adapter._failed_already.clear()
+
     # ---- 建立（Coordinator 於 CONTENT_GENERATED 時呼叫） ----
 
     # 尚未進入發送流程的狀態——此時重新注入同一事件應覆寫草稿而非新增一則

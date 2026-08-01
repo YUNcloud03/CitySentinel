@@ -11,6 +11,9 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime
+import hashlib
+import json
+import time
 
 from .. import notifications
 from ..data_loader import (
@@ -137,6 +140,13 @@ class Coordinator:
         # 記錄每個事件目前佔用的資源配置，供 re-inject / 拒絕時歸還
         self._incident_allocations: dict[str, list[dict]] = {}
 
+    def reset(self) -> None:
+        """Clear operational state and restore the resource registry."""
+        self.incident_states.clear()
+        self._incident_allocations.clear()
+        self.bundle.registry.reset()
+        self.bundle.notification_center.reset()
+
     # ---- 對外入口 ----
 
     def inject_incident(self, event_id: str, at: datetime | None = None) -> dict:
@@ -158,6 +168,7 @@ class Coordinator:
         覆寫只作用於本次判定所用的快照副本，來源資料與正式狀態均不變，
         且會在事件、通報與系統紀錄標示為假設值，不與實際資料混淆。
         """
+        processing_started = time.perf_counter()
         at = at or parse_ts(incident["timestamp"])
         incident_id = incident.get("event_id", "ADHOC")
         # 重新注入同一事件：先歸還前次佔用的資源，避免庫存被重複扣減
@@ -168,6 +179,9 @@ class Coordinator:
         state = {
             "incident_id": incident_id,
             "workflow_status": "processing",
+            "operational_status": "IMPACT_ACTIVE",
+            "resolved_at": None,
+            "resolution": None,
             "current_step": "NEW",
             "event": incident,
             "as_of": format_ts(at),
@@ -251,11 +265,15 @@ class Coordinator:
             # ROUTE_PLANNED（SOP 2 觸發才需要）
             rule2 = next((t for t in incident_triggers if t["rule_id"] == 2), None)
             if rule2 is not None:
+                routing_started = time.perf_counter()
                 routing = routing_engine.plan_evacuation(
                     incident["affected_segment"],
                     self.bundle.network,
                     traffic_snap,
                     incident.get("location"),
+                )
+                state["routing_latency_ms"] = round(
+                    (time.perf_counter() - routing_started) * 1000, 2
                 )
                 state["routing_result"] = routing
                 step("ROUTE_PLANNED", {
@@ -369,6 +387,22 @@ class Coordinator:
             state["errors"].append(str(exc))
             state["workflow_status"] = "failed"
             step("FAILED_FINAL", {"error": str(exc)})
+
+        total_latency_ms = round((time.perf_counter() - processing_started) * 1000, 2)
+        state["performance"] = {
+            "routing_latency_ms": state.get("routing_latency_ms"),
+            "total_processing_ms": total_latency_ms,
+            "requirement_limit_ms": 60_000,
+            "within_60_seconds": total_latency_ms <= 60_000,
+            "measurement_scope": "Coordinator 事件驗證、SOP、路徑、ETE、調度與內容產出",
+        }
+        canonical_input = json.dumps({
+            "event": state["event"],
+            "as_of": state["as_of"],
+            "triggered_rules": state["triggered_rules"],
+        }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        state["input_sha256"] = hashlib.sha256(canonical_input.encode("utf-8")).hexdigest()
+        state["simulation_run_id"] = f"INCIDENT-{state['input_sha256'][:12]}"
 
         self.incident_states[state["incident_id"]] = state
         return state
@@ -562,6 +596,7 @@ class Coordinator:
         count: int | None = None,
         reason: str = "",
         operator: str = "commander",
+        simulation_time: str | None = None,
     ) -> dict:
         """管理者對單一調度動作的操作。保留原始 Agent 建議，覆寫寫入稽核。
 
@@ -581,11 +616,15 @@ class Coordinator:
 
         if op == "accept":
             action["status"] = "accepted"
+            action["allocation_state"] = "committed"
+            action["accepted_sim_time"] = simulation_time or state.get("as_of")
+            state["operational_status"] = "RESPONSE_AUTHORIZED"
         elif op == "reject":
             self._release_action(incident_id, action)
             action["assignments"] = []
             action["fulfilled_count"] = 0
             action["status"] = "rejected"
+            action["allocation_state"] = "released"
         elif op == "adjust":
             if count is None:
                 raise ValueError("adjust 需提供 count")
@@ -598,6 +637,10 @@ class Coordinator:
             action["fulfilled_count"] = count - gap
             action["gap"] = gap
             action["status"] = "adjusted" if gap == 0 else "shortfall"
+            action["allocation_state"] = "committed" if gap == 0 else "partial"
+            action["accepted_sim_time"] = simulation_time or state.get("as_of")
+            if gap == 0:
+                state["operational_status"] = "RESPONSE_AUTHORIZED"
             self._incident_allocations.setdefault(incident_id, [])
             self._incident_allocations[incident_id].extend(assignments)
             override["adjusted_to"] = count
@@ -608,12 +651,47 @@ class Coordinator:
         state["decision_trace"].append({
             "step": "HUMAN_OVERRIDE",
             "at": datetime.now().isoformat(timespec="milliseconds"),
-            "detail": {"action_id": action_id, **override},
+            "detail": {"action_id": action_id, "simulation_time": simulation_time, **override},
         })
         self._refresh_gaps(state)
         # 拒絕/調降釋出的資源，自動回填其他事件的缺口（優先權排序）
         if op in ("reject", "adjust"):
             self._rebalance()
+        return state
+
+    def resolve_incident(
+        self,
+        incident_id: str,
+        *,
+        operator: str,
+        reason: str,
+        simulation_time: str,
+    ) -> dict:
+        """Close an operational incident only after an explicit human confirmation."""
+        state = self.incident_states.get(incident_id)
+        if state is None:
+            raise KeyError(f"事件 {incident_id} 尚未處理")
+        if state.get("operational_status") == "RESOLVED":
+            return state
+        allocations = self._incident_allocations.pop(incident_id, [])
+        if allocations:
+            self.bundle.registry.release(allocations)
+        for action in (state.get("dispatch") or {}).get("actions", []):
+            if action.get("allocation_state") in {"reserved", "committed", "partial"}:
+                action["allocation_state"] = "released"
+        state["operational_status"] = "RESOLVED"
+        state["resolved_at"] = simulation_time
+        state["resolution"] = {"operator": operator, "reason": reason}
+        state["decision_trace"].append({
+            "step": "INCIDENT_RESOLVED",
+            "at": datetime.now().isoformat(timespec="milliseconds"),
+            "detail": {
+                "operator": operator,
+                "reason": reason,
+                "simulation_time": simulation_time,
+                "released_assignments": len(allocations),
+            },
+        })
         return state
 
     def _release_action(self, incident_id: str, action: dict) -> None:

@@ -5,9 +5,98 @@
 """
 from __future__ import annotations
 
+import hashlib
+import json
+
 from ..data_loader import all_timestamps, format_ts
-from ..engines import rule_engine
+from ..engines import ete_calculator, rule_engine
 from ..coordinator.coordinator import DataBundle
+from .incident_effects import project_incident
+
+
+def _scenario_metrics(record) -> dict:
+    saturation = record.saturation_score if hasattr(record, "saturation_score") else record["saturation_score"]
+    return {
+        "avg_speed": record.avg_speed if hasattr(record, "avg_speed") else record["avg_speed"],
+        "vehicle_count": record.vehicle_count if hasattr(record, "vehicle_count") else record["vehicle_count"],
+        "saturation_score": saturation,
+        "congestion_level": "A" if saturation >= .95 else "B" if saturation >= .85 else "Normal",
+    }
+
+
+def build_scenario_comparison(at, baseline, current, context, incident_state) -> dict | None:
+    """Build one backend-owned evidence contract for baseline/event/treatment."""
+    if not context.get("active") or not incident_state:
+        return None
+    segment_id = context.get("affected_segment_id")
+    event_metrics = context.get("unmitigated_metrics", {}).get(segment_id)
+    if not segment_id or segment_id not in baseline or segment_id not in current or not event_metrics:
+        return None
+
+    event = incident_state.get("event") or {}
+    severity = event.get("severity")
+
+    def ete_for(saturation: float) -> dict | None:
+        if severity not in ete_calculator.BASE_CLEARANCE:
+            return None
+        return ete_calculator.calculate_ete(severity, [saturation])
+
+    baseline_metrics = _scenario_metrics(baseline[segment_id])
+    incident_metrics = _scenario_metrics(event_metrics)
+    treatment_metrics = _scenario_metrics(current[segment_id])
+    accepted = bool(context.get("accepted_action_ids"))
+    on_scene = bool(context.get("on_scene_action_ids"))
+    treatment_state = (
+        "CLEARANCE_ACTIVE" if on_scene and context.get("response_phase") == "CLEARANCE_ACTIVE"
+        else "CLEARED_AWAITING_FIELD_CONFIRMATION" if context.get("response_phase") == "CLEARED"
+        else "DISPATCHING_NO_IMPROVEMENT_YET" if accepted
+        else "LOCKED_PENDING_APPROVAL"
+    )
+    canonical_input = json.dumps({
+        "as_of": format_ts(at),
+        "segment_id": segment_id,
+        "event": event,
+        "baseline": baseline_metrics,
+        "accepted_action_ids": context.get("accepted_action_ids", []),
+        "on_scene_action_ids": context.get("on_scene_action_ids", []),
+        "model": context.get("model"),
+    }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    input_hash = hashlib.sha256(canonical_input.encode("utf-8")).hexdigest()
+    return {
+        "simulation_run_id": f"COMPARE-{input_hash[:12]}",
+        "input_sha256": input_hash,
+        "as_of": format_ts(at),
+        "affected_segment_id": segment_id,
+        "affected_road_name": baseline[segment_id].road_name,
+        "model": context.get("model"),
+        "randomness_used": False,
+        "scenarios": {
+            "baseline": {
+                "available": True,
+                "state": "NO_INCIDENT",
+                "metrics": baseline_metrics,
+                "ete": None,
+                "source": "city_traffic_flow.csv",
+            },
+            "incident": {
+                "available": True,
+                "state": "OBSTACLE_ACTIVE_UNMITIGATED",
+                "metrics": incident_metrics,
+                "ete": ete_for(incident_metrics["saturation_score"]),
+                "source": context.get("model"),
+            },
+            "treatment": {
+                "available": accepted,
+                "state": treatment_state,
+                "locked_reason": None if accepted else "指揮官尚未核准任何處置決策",
+                "effect_started": on_scene,
+                "metrics": treatment_metrics if accepted else None,
+                "ete": ete_for(treatment_metrics["saturation_score"]) if accepted else None,
+                "source": context.get("model") if accepted else None,
+            },
+        },
+        "ete_definition": "依 SOP 第 7 條，以各情境當下飽和度重新估算；不是剩餘時間線性插值",
+    }
 
 
 class SimulationPlayer:
@@ -18,6 +107,19 @@ class SimulationPlayer:
         self.playing = False
         self.speed = 1
         self.alert_log: list[dict] = []
+        self.active_incident_state: dict | None = None
+
+    def activate_incident(self, state: dict | None) -> None:
+        """Attach one incident scenario to subsequent timeline views."""
+        self.active_incident_state = state
+
+    def reset(self, timestamp: str = "2026-05-20 21:00") -> dict:
+        """Return the player to a clean, paused organizer-data baseline."""
+        self.playing = False
+        self.speed = 1
+        self.alert_log.clear()
+        self.active_incident_state = None
+        return self.seek(timestamp)
 
     # ---- 控制 ----
 
@@ -64,10 +166,19 @@ class SimulationPlayer:
         if at is None:
             return {"playing": self.playing, "sim_time": None, "message": "尚未開始播放"}
 
-        traffic_snap = self.bundle.traffic_at(at)
+        baseline_traffic = self.bundle.traffic_at(at)
+        traffic_snap, simulation_context = project_incident(
+            at=at,
+            baseline=baseline_traffic,
+            incident_state=self.active_incident_state,
+            network=self.bundle.network,
+        )
         crowd_snap = self.bundle.crowd_at(at)
         traffic_eval = rule_engine.evaluate_traffic(traffic_snap)
         crowd_triggers = rule_engine.evaluate_crowd(crowd_snap, self.bundle.crowd, at)
+        scenario_comparison = build_scenario_comparison(
+            at, baseline_traffic, traffic_snap, simulation_context, self.active_incident_state
+        )
 
         alerts = traffic_eval["triggers"] + crowd_triggers
         for alert in alerts:
@@ -96,6 +207,22 @@ class SimulationPlayer:
                     "lane_status": rec.lane_status,
                     "congestion_level": traffic_eval["levels"][seg_id],
                     "data_time": format_ts(rec.timestamp),
+                    "simulation_source": (
+                        "incident_projection"
+                        if seg_id in simulation_context.get("changed_segment_ids", [])
+                        else "organizer_dataset"
+                    ),
+                    "baseline_avg_speed": baseline_traffic[seg_id].avg_speed,
+                    "baseline_vehicle_count": baseline_traffic[seg_id].vehicle_count,
+                    "baseline_saturation_score": baseline_traffic[seg_id].saturation_score,
+                    **(
+                        {
+                            "event_avg_speed": simulation_context["unmitigated_metrics"][seg_id]["avg_speed"],
+                            "event_vehicle_count": simulation_context["unmitigated_metrics"][seg_id]["vehicle_count"],
+                            "event_saturation_score": simulation_context["unmitigated_metrics"][seg_id]["saturation_score"],
+                        }
+                        if seg_id in simulation_context.get("unmitigated_metrics", {}) else {}
+                    ),
                 }
                 for seg_id, rec in sorted(traffic_snap.items())
             },
@@ -111,4 +238,6 @@ class SimulationPlayer:
             },
             "active_alerts": alerts,
             "alert_log_size": len(self.alert_log),
+            "simulation_context": simulation_context,
+            "scenario_comparison": scenario_comparison,
         }

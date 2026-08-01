@@ -112,6 +112,8 @@ def plan_dispatch(
             ),
             "assignments": assignments,
             "status": "shortfall" if gap > 0 else "proposed",
+            "allocation_state": "reserved",
+            "accepted_sim_time": None,
             "override": None,
         }
         if gap > 0:

@@ -25,6 +25,9 @@ def test_acc_001_road_collapse(coordinator):
     state = coordinator.inject_incident("TPE_2026_ACC_001")
     assert state["workflow_status"] == "completed"
     assert 2 in state["triggered_rules"]
+    assert state["performance"]["within_60_seconds"] is True
+    assert state["performance"]["requirement_limit_ms"] == 60_000
+    assert state["performance"]["routing_latency_ms"] is not None
 
     routing = state["routing_result"]
     # 上游相交且容量足夠者中飽和度最低 → 市民大道四段（22:00 快照 0.78）

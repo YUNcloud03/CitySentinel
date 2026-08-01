@@ -317,7 +317,7 @@ function DispatchSection({
           </div>
           <div className="da-detail">{a.deterministic_result}</div>
           <div className="da-assign">
-            配置：
+            {a.allocation_state === "committed" ? "正式派遣：" : "預留資源："}
             {a.assignments.length
               ? a.assignments.map((x: any) => `${x.label} ×${x.count}（ETA ${x.eta_minutes}分）`).join("、")
               : "—"}
@@ -359,7 +359,7 @@ function DispatchSection({
               人工覆寫：{a.override.override_by}｜{a.override.op}｜{a.override.override_reason || "（未填理由）"}｜{a.override.override_at}
             </div>
           )}
-          {a.status !== "rejected" && (
+          {(a.status === "proposed" || a.status === "shortfall") && (
             <div className="da-actions">
               <button disabled={busyId === a.action_id} onClick={() => act(a.action_id, "accept")}>接受</button>
               <button disabled={busyId === a.action_id} onClick={() => {
@@ -370,6 +370,12 @@ function DispatchSection({
                 const r = prompt("拒絕理由：", "現場已有資源");
                 if (r !== null) act(a.action_id, "reject", { reason: r });
               }}>拒絕</button>
+            </div>
+          )}
+          {(a.status === "accepted" || a.status === "adjusted") && (
+            <div className="dispatch-execution-note">
+              ✓ 決策已核准，疏通處理將隨模擬時間逐步生效
+              {a.accepted_sim_time ? `｜啟動 ${a.accepted_sim_time}` : ""}
             </div>
           )}
         </div>
@@ -514,8 +520,30 @@ export function IncidentDetail({ incident, onRefresh }: { incident: IncidentStat
   const ete = incident.ete_result;
   const noti = incident.notifications;
   const attr = incident.rule_attribution;
+  const [resolving, setResolving] = useState(false);
+  const resolveIncident = async () => {
+    const reason = prompt("請輸入現場確認事件已排除的依據：", "現場人員確認障礙排除，道路恢復通行");
+    if (!reason) return;
+    setResolving(true);
+    try {
+      await api.resolveIncident(incident.incident_id, reason);
+      onRefresh();
+    } finally {
+      setResolving(false);
+    }
+  };
   return (
     <div className="incident-detail">
+      <div className={`operational-state state-${String(incident.operational_status ?? "IMPACT_ACTIVE").toLowerCase()}`}>
+        <div><small>事件作業狀態</small><b>{incident.operational_status === "RESOLVED" ? "已確認排除"
+          : incident.operational_status === "RESPONSE_AUTHORIZED" ? "處置已核准"
+          : "障礙影響中"}</b></div>
+        {incident.operational_status !== "RESOLVED" && (
+          <button type="button" disabled={resolving} onClick={resolveIncident}>
+            {resolving ? "結案中…" : "現場確認排除"}
+          </button>
+        )}
+      </div>
       {attr ? (
         <div className="attribution">
           <div><span className="attr-label caused">事件觸發</span>
@@ -747,7 +775,7 @@ export function NotificationLifecyclePanel({ refreshKey }: { refreshKey: number 
 
 // ---- 自訂事件模擬器 ----
 
-const SEGMENT_OPTIONS = [
+const FALLBACK_SEGMENT_OPTIONS = [
   ["RD_TPE_001", "忠孝東路四段"], ["RD_TPE_002", "光復南路"], ["RD_TPE_003", "基隆路一段"],
   ["RD_TPE_004", "市民大道四段"], ["RD_TPE_005", "仁愛路四段"], ["RD_TPE_006", "敦化南路一段"],
   ["RD_TPE_007", "松高路"], ["RD_TPE_008", "延吉街"], ["RD_TPE_009", "基隆路地下道"],
@@ -755,32 +783,103 @@ const SEGMENT_OPTIONS = [
   ["RD_TPE_013", "信義路五段"], ["RD_TPE_014", "松智路"], ["RD_TPE_015", "復興南路一段"],
 ];
 
-export function CustomEventForm({ onInjected }: { onInjected: (state: IncidentState) => void }) {
+const CUSTOM_EVENT_TYPES = [
+  ["Road_Collapse", "路面塌陷", 1],
+  ["Traffic_Accident", "交通事故", .9],
+  ["Power_Failure", "號誌故障", .7],
+  ["Flooding", "道路積水", .82],
+] as const;
+const CUSTOM_EVENT_STATUSES = [
+  ["Closed", "完全封閉", "一般車輛不可通行，路線規劃排除事故路段", 1],
+  ["Blocked", "嚴重阻塞", "道路接近無法通行，僅保留極低通行能力", .88],
+  ["Restricted", "部分管制", "依封閉車道數降低道路容量", .64],
+  ["Caution", "警戒通行", "仍可通行，但需降速並持續監測", .42],
+] as const;
+const SEVERITY_PREVIEW = {
+  Critical: { saturation: .38, speedLoss: .78, label: "最高優先" },
+  High: { saturation: .29, speedLoss: .62, label: "高優先" },
+  Medium: { saturation: .19, speedLoss: .43, label: "一般應變" },
+  Low: { saturation: .10, speedLoss: .24, label: "持續監測" },
+} as const;
+
+export function CustomEventForm({ onInjected, simTime }: {
+  onInjected: (state: IncidentState) => void;
+  simTime?: string | null;
+}) {
   const [form, setForm] = useState({
     type: "Road_Collapse",
     affected_segment: "RD_TPE_003",
     status: "Closed",
     severity: "High",
-    timestamp: "2026-05-20 22:00",
+    timestamp: simTime ?? "2026-05-20 22:00",
+    affected_direction: "both",
+    lanes_total: 2,
+    lanes_closed: 2,
+    review_interval_minutes: 15,
+    source_type: "operator",
+    human_confirmed: true,
+    description: "",
     roaming_override_pct: "",  // ""＝依實際資料
   });
+  const [segments, setSegments] = useState(FALLBACK_SEGMENT_OPTIONS);
+  const [timestamps, setTimestamps] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
+  useEffect(() => {
+    let active = true;
+    Promise.all([api.roadNetwork(), api.timeline()]).then(([roads, timeline]) => {
+      if (!active) return;
+      const options = roads
+        .filter((road: any) => String(road.segment_id).startsWith("RD_"))
+        .map((road: any) => [String(road.segment_id), String(road.name)] as [string, string]);
+      if (options.length) setSegments(options);
+      setTimestamps(timeline.timestamps);
+    }).catch(() => {});
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (simTime) setForm((current) => ({ ...current, timestamp: simTime }));
+  }, [simTime]);
+
+  const set = (key: keyof typeof form, value: string | number | boolean) => {
+    setForm((current) => {
+      const next = { ...current, [key]: value };
+      if (key === "status" && value === "Closed") next.lanes_closed = next.lanes_total;
+      if (key === "lanes_total") {
+        next.lanes_closed = next.status === "Closed"
+          ? Number(value)
+          : Math.min(next.lanes_closed, Number(value));
+      }
+      return next;
+    });
+  };
+
+  const statusOption = CUSTOM_EVENT_STATUSES.find(([value]) => value === form.status)!;
+  const typeOption = CUSTOM_EVENT_TYPES.find(([value]) => value === form.type)!;
+  const severity = SEVERITY_PREVIEW[form.severity as keyof typeof SEVERITY_PREVIEW];
+  const initialIntensity = statusOption[3] * typeOption[2] * .55;
+  const previewSpeedLoss = form.status === "Closed"
+    ? 100
+    : Math.round(severity.speedLoss * initialIntensity * 100);
+  const previewSaturation = Math.round(severity.saturation * initialIntensity * 100) / 100;
+  const capacityPct = form.status === "Closed"
+    ? 0
+    : Math.round((1 - form.lanes_closed / form.lanes_total) * 100);
 
   const submit = async () => {
     setBusy(true);
     setError("");
     try {
-      const segName = SEGMENT_OPTIONS.find(([id]) => id === form.affected_segment)?.[1] ?? "";
+      const segName = segments.find(([id]) => id === form.affected_segment)?.[1] ?? "";
       const state = await api.customIncident({
         ...form,
         // 空字串＝不覆寫，須送 null 而非 ""（後端欄位為 float | None）
         roaming_override_pct: form.roaming_override_pct === ""
           ? null : Number(form.roaming_override_pct),
         location: segName,
-        description: `自訂模擬事件：${segName} ${form.type}`,
+        description: form.description.trim() || `自訂模擬事件：${segName} ${typeOption[1]}，${statusOption[1]}`,
       });
       onInjected(state);
     } catch (e: any) {
@@ -793,36 +892,50 @@ export function CustomEventForm({ onInjected }: { onInjected: (state: IncidentSt
   return (
     <details className="panel custom-event">
       <summary><h3 style={{ display: "inline" }}>自訂事件模擬器</h3></summary>
+      <p className="custom-event-intro">建立可重播的模擬事件；所有選項在注入前先顯示計算影響，不會直接修改真實設備。</p>
       <div className="form-grid">
         <label>路段
           <select value={form.affected_segment} onChange={(e) => set("affected_segment", e.target.value)}>
-            {SEGMENT_OPTIONS.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+            {segments.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
           </select>
         </label>
         <label>類型
           <select value={form.type} onChange={(e) => set("type", e.target.value)}>
-            <option value="Road_Collapse">路面塌陷</option>
-            <option value="Traffic_Accident">交通事故</option>
-            <option value="Power_Failure">號誌故障</option>
-            <option value="Flooding">道路積水</option>
+            {CUSTOM_EVENT_TYPES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
         </label>
         <label>狀態
           <select value={form.status} onChange={(e) => set("status", e.target.value)}>
-            <option>Closed</option><option>Blocked</option>
-            <option>Restricted</option><option>Caution</option>
+            {CUSTOM_EVENT_STATUSES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
+          <small>{statusOption[2]}</small>
         </label>
         <label>嚴重度
           <select value={form.severity} onChange={(e) => set("severity", e.target.value)}>
-            <option>Critical</option><option>High</option>
-            <option>Medium</option><option>Low</option>
+            <option value="Critical">重大｜最高優先</option><option value="High">高｜立即處理</option>
+            <option value="Medium">中｜一般應變</option><option value="Low">低｜持續監測</option>
           </select>
+        </label>
+        <label>影響方向
+          <select value={form.affected_direction} onChange={(e) => set("affected_direction", e.target.value)}>
+            <option value="both">雙向</option><option value="northbound">北向</option>
+            <option value="southbound">南向</option><option value="eastbound">東向</option>
+            <option value="westbound">西向</option>
+          </select>
+        </label>
+        <label>總車道數
+          <input type="number" min={1} max={8} value={form.lanes_total}
+            onChange={(e) => set("lanes_total", Number(e.target.value))} />
+        </label>
+        <label>封閉車道數
+          <input type="number" min={0} max={form.lanes_total} value={form.lanes_closed}
+            disabled={form.status === "Closed"}
+            onChange={(e) => set("lanes_closed", Number(e.target.value))} />
         </label>
         <label>時間
           <select value={form.timestamp} onChange={(e) => set("timestamp", e.target.value)}>
-            {["17:00", "19:00", "21:00", "21:30", "22:00", "22:15", "22:30"].map((t) => (
-              <option key={t} value={`2026-05-20 ${t}`}>{t}</option>
+            {(timestamps.length ? timestamps : [form.timestamp]).map((timestamp) => (
+              <option key={timestamp} value={timestamp}>{timestamp.slice(11)}｜資料時間點</option>
             ))}
           </select>
         </label>
@@ -835,6 +948,38 @@ export function CustomEventForm({ onInjected }: { onInjected: (state: IncidentSt
             ))}
           </select>
         </label>
+        <label>重新評估間隔
+          <select value={form.review_interval_minutes} onChange={(e) => set("review_interval_minutes", Number(e.target.value))}>
+            {[5, 10, 15, 30, 60].map((minutes) => <option key={minutes} value={minutes}>{minutes} 分鐘</option>)}
+          </select>
+          <small>到期只提醒重新確認，不會自動判定事件結束</small>
+        </label>
+        <label>資料來源
+          <select value={form.source_type} onChange={(e) => set("source_type", e.target.value)}>
+            <option value="operator">指揮官輸入</option><option value="official">官方通報</option>
+            <option value="iot">IoT 感測器</option><option value="camera">攝影機辨識</option>
+            <option value="citizen">民眾回報</option><option value="unknown">來源待確認</option>
+          </select>
+        </label>
+        <label className="custom-event-confirm">
+          <input type="checkbox" checked={form.human_confirmed}
+            onChange={(e) => set("human_confirmed", e.target.checked)} />
+          已由人員確認事件
+        </label>
+        <label className="custom-event-description">補充描述
+          <textarea rows={2} value={form.description} placeholder="例如：內側兩車道塌陷，現場已設置封鎖線"
+            onChange={(e) => set("description", e.target.value)} />
+        </label>
+      </div>
+      <div className="custom-impact-preview">
+        <div><b>注入前影響預覽</b><span>固定規則｜可重播</span></div>
+        <ul>
+          <li>初始道路容量：<strong>{capacityPct}%</strong></li>
+          <li>初始速度影響：<strong>{form.status === "Closed" ? "一般通行歸零" : `約下降 ${previewSpeedLoss}%`}</strong></li>
+          <li>初始飽和度：<strong>約增加 {previewSaturation}</strong></li>
+          <li>應變層級：<strong>{severity.label}</strong></li>
+        </ul>
+        <small>依據：狀態係數 {statusOption[3]} × 類型係數 {typeOption[2]} × 初始時間係數 0.55；30 分鐘內逐步達完整影響。</small>
       </div>
       {form.roaming_override_pct !== "" && (
         <p className="dim small">

@@ -536,6 +536,7 @@ Base URL：`http://localhost:8000`
 | POST | `/api/simulation/pause` | 暫停 |
 | POST | `/api/simulation/seek` | 跳轉（body: `timestamp`） |
 | POST | `/api/simulation/tick` | 推進一個時間點 |
+| POST | `/api/simulation/reset` | 清除本輪事件、資源占用、通報與救援走廊，回到 21:00 基準 |
 | GET | `/api/simulation/state` | 當前狀態 |
 | GET | `/api/simulation/alerts` | 累積預警記錄 |
 
@@ -615,7 +616,7 @@ Base URL：`http://localhost:8000`
 | 基地台/場站 | Circle，半徑依人數，漫遊 ≥30% 轉紫 |
 | 事故點 | 紅色圓點 |
 
-> hover 路段/場站顯示即時數值 popup。地圖座標為**示意用近似經緯度**（主辦資料未提供座標），畫面明確標註「處置判定不使用這些座標」。
+> hover 路段/場站顯示即時數值 popup。15 條路線幾何以主辦方 `road_network_geometry.json` 為準；號誌、行穿線與 CMS 另標示官方圖資來源，燈相與事件影響則明確標示為模擬。
 
 ### 資料更新機制
 
@@ -625,7 +626,7 @@ Base URL：`http://localhost:8000`
 
 ## 12. 測試
 
-**38 項測試全數通過**（`python -m pytest tests -q`）。
+**後端 171 項、前端 10 項測試全數通過**（`python -m pytest tests -q`、`npm test -- --run`）。
 
 | 檔案 | 涵蓋 |
 |---|---|
@@ -687,7 +688,7 @@ python -m pytest tests -q
 - ✅ 時序播放器 + 自動監測
 - ✅ CMS + 中英日韓通報模板
 - ✅ React + MapLibre Dashboard（瀏覽器實測通過）
-- ✅ 38 項測試全綠
+- ✅ 後端 171 項、前端 10 項測試全綠
 - ✅ git 版控（3 個 commit）
 
 ### 尚未做（誠實交代）

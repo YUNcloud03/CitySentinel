@@ -72,7 +72,7 @@ OPENAI_API_KEY=...        # 次選
 - ✅ What-if Sandbox：覆寫假設、不動正式狀態
 - ✅ 時序播放器：沿資料時間軸推進、自動觸發預警
 - ✅ 通報模板：CMS + 中/英/日/韓（LLM fallback 保證）
-- ✅ 測試：30 項全數通過（技術文件 19.1–19.3 + 端到端 Demo 場景）
+- ✅ 測試：後端 171 項、前端 10 項全數通過（含事件生命週期、地理計算與端到端場景）
 
 ## Phase 2 進度
 
@@ -200,6 +200,7 @@ python -m pytest tests -q
 | `POST /api/simulation/start` | 啟動時序播放（`speed`、`start_timestamp`） |
 | `POST /api/simulation/tick` | 推進一個資料時間點，回傳快照與觸發預警 |
 | `POST /api/simulation/pause` / `seek` | 暫停／跳轉 |
+| `POST /api/simulation/reset` | 清除本輪事件、調度、通報與救援走廊，回到 21:00 官方資料基準 |
 | `POST /api/incidents/inject` | 注入事件（`event_id` 來自 live_incidents.json） |
 | `GET /api/incidents/{id}` | 事件完整狀態 |
 | `GET /api/incidents/{id}/decision-trace` | 決策鏈（規則、路徑、排除理由、ETE、SOP 原文） |
@@ -221,6 +222,8 @@ python -m pytest tests -q
 | 多語通報 | 台北101 漫遊 45% 觸發 SOP 6，中英日韓同步產出 |
 | What-if | BL17 覆寫 40,000 人 → sandbox 觸發 SOP 3，正式狀態不變 |
 | 救護車綠色走廊 | 避開忠孝東路事故，6 路段、25 個官方號誌；ETA 20 → 10 分，核准前不啟動號誌優先 |
+| 決策前後驗證 | ACC_001 注入後處置結果鎖定；人工接受並播放後，速度 1 → 7.3 km/h、ETE 105 → 90 分 |
+| 重新開始 | 回到 21:00、事件清空、警力恢復 12/12、情境驗證視圖移除 |
 
 ## 專案結構
 
@@ -241,5 +244,5 @@ backend/app/
 ├─ simulation/player.py  # 時序播放器
 └─ api/main.py           # FastAPI 端點
 data/raw/                # 官方資料（authoritative，見 data/DATA_NOTES.md）
-tests/                   # 114 項單元＋整合測試
+tests/                   # 171 項後端單元＋整合測試（另有前端 10 項 Vitest）
 ```

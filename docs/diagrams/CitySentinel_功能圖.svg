@@ -1,0 +1,141 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="920" viewBox="0 0 1440 920" font-family="Noto Sans TC, Microsoft JhengHei, PingFang TC, sans-serif">
+  <rect x="0" y="0" width="1440" height="920" fill="#0e1012"/>
+
+  <text x="60" y="66" font-size="30" font-weight="600" fill="#e8ecf1">CitySentinel 系統功能圖</text>
+  <text x="60" y="98" font-size="15" fill="#8b95a3">四大功能群 · 對應甲方會依序問出的四個問題</text>
+  <rect x="60" y="116" width="1340" height="1" fill="#2a3038"/>
+
+  <!-- ===== 群一 ===== -->
+  <rect x="60" y="150" width="290" height="76" rx="12" fill="#1d2126" stroke="#2a3038"/>
+  <rect x="76" y="166" width="28" height="28" rx="8" fill="#007afc"/>
+  <text x="90" y="185" font-size="15" font-weight="600" fill="#ffffff" text-anchor="middle">1</text>
+  <text x="116" y="182" font-size="16" font-weight="600" fill="#e8ecf1">態勢感知與事件研判</text>
+  <text x="116" y="204" font-size="12.5" fill="#8b95a3">「現在發生什麼」</text>
+
+  <rect x="60" y="246" width="290" height="78" rx="10" fill="#16191c" stroke="#2a3038"/>
+  <text x="78" y="276" font-size="14.5" fill="#e8ecf1">時間軸播放器</text>
+  <text x="78" y="298" font-size="12" fill="#8b95a3">可暫停、可跳轉至任一時刻</text>
+  <text x="78" y="315" font-size="12" fill="#8b95a3">每一格重新判定</text>
+
+  <rect x="60" y="336" width="290" height="78" rx="10" fill="#16191c" stroke="#2a3038"/>
+  <text x="78" y="366" font-size="14.5" fill="#e8ecf1">SOP 規則引擎</text>
+  <text x="78" y="388" font-size="12" fill="#8b95a3">六條規則逐格判定</text>
+  <text x="78" y="405" font-size="12" fill="#8b95a3">命中即產生警報</text>
+
+  <rect x="60" y="426" width="290" height="78" rx="10" fill="#16191c" stroke="#2a3038"/>
+  <text x="78" y="456" font-size="14.5" fill="#e8ecf1">多來源信心評分</text>
+  <text x="78" y="478" font-size="12" fill="#8b95a3">官方 +0.50 · 車速崩塌 +0.20</text>
+  <text x="78" y="495" font-size="12" fill="#8b95a3">車道 +0.15 · 人流 +0.10</text>
+
+  <rect x="60" y="516" width="290" height="78" rx="10" fill="#16191c" stroke="#2a3038"/>
+  <text x="78" y="546" font-size="14.5" fill="#e8ecf1">執行權限閘門</text>
+  <text x="78" y="568" font-size="12" fill="#8b95a3">高信心預留資源 · 中信心待確認</text>
+  <text x="78" y="585" font-size="12" fill="#8b95a3">低信心僅監看</text>
+
+  <!-- ===== 群二 ===== -->
+  <rect x="410" y="150" width="290" height="76" rx="12" fill="#1d2126" stroke="#2a3038"/>
+  <rect x="426" y="166" width="28" height="28" rx="8" fill="#007afc"/>
+  <text x="440" y="185" font-size="15" font-weight="600" fill="#ffffff" text-anchor="middle">2</text>
+  <text x="466" y="182" font-size="16" font-weight="600" fill="#e8ecf1">事件推演與方案比較</text>
+  <text x="466" y="204" font-size="12.5" fill="#8b95a3">「接下來會怎樣、該怎麼辦」</text>
+
+  <rect x="410" y="246" width="290" height="78" rx="10" fill="#16191c" stroke="#2a3038"/>
+  <text x="428" y="276" font-size="14.5" fill="#e8ecf1">事件投影</text>
+  <text x="428" y="298" font-size="12" fill="#8b95a3">受影響路段逐格惡化</text>
+  <text x="428" y="315" font-size="12" fill="#8b95a3">強度 30 分鐘內 0.55 → 1.0</text>
+
+  <rect x="410" y="336" width="290" height="78" rx="10" fill="#16191c" stroke="#2a3038"/>
+  <text x="428" y="366" font-size="14.5" fill="#e8ecf1">改道負載傳導</text>
+  <text x="428" y="388" font-size="12" fill="#8b95a3">主要路線承受 100%</text>
+  <text x="428" y="405" font-size="12" fill="#8b95a3">次要路線各承受 42%</text>
+
+  <rect x="410" y="426" width="290" height="78" rx="10" fill="#16191c" stroke="#2a3038"/>
+  <text x="428" y="456" font-size="14.5" fill="#e8ecf1">路線動態重算</text>
+  <text x="428" y="478" font-size="12" fill="#8b95a3">在壓力測試後的路網上</text>
+  <text x="428" y="495" font-size="12" fill="#8b95a3">重新規劃一次路線</text>
+
+  <rect x="410" y="516" width="290" height="78" rx="10" fill="#16191c" stroke="#2a3038"/>
+  <text x="428" y="546" font-size="14.5" fill="#e8ecf1">決策沙盒</text>
+  <text x="428" y="568" font-size="12" fill="#8b95a3">四種措施 × 四種突發狀況</text>
+  <text x="428" y="585" font-size="12" fill="#8b95a3">回傳全網 before / after</text>
+
+  <rect x="410" y="606" width="290" height="78" rx="10" fill="#16191c" stroke="#ff9f0a" stroke-opacity="0.55"/>
+  <text x="428" y="636" font-size="14.5" fill="#e8ecf1">副作用判定</text>
+  <text x="428" y="658" font-size="12" fill="#ffb347">會明說「壅塞可能</text>
+  <text x="428" y="675" font-size="12" fill="#ffb347">轉移到其他道路」</text>
+
+  <rect x="410" y="696" width="290" height="78" rx="10" fill="#16191c" stroke="#2a3038"/>
+  <text x="428" y="726" font-size="14.5" fill="#e8ecf1">智慧號誌配時</text>
+  <text x="428" y="748" font-size="12" fill="#8b95a3">需求分數計算綠燈秒數</text>
+  <text x="428" y="765" font-size="12" fill="#8b95a3">並保留安全最小下限</text>
+
+  <!-- ===== 群三 ===== -->
+  <rect x="760" y="150" width="290" height="76" rx="12" fill="#1d2126" stroke="#2a3038"/>
+  <rect x="776" y="166" width="28" height="28" rx="8" fill="#007afc"/>
+  <text x="790" y="185" font-size="15" font-weight="600" fill="#ffffff" text-anchor="middle">3</text>
+  <text x="816" y="182" font-size="16" font-weight="600" fill="#e8ecf1">處置與調度</text>
+  <text x="816" y="204" font-size="12.5" fill="#8b95a3">「把決定變成行動」</text>
+
+  <rect x="760" y="246" width="290" height="78" rx="10" fill="#16191c" stroke="#2a3038"/>
+  <text x="778" y="276" font-size="14.5" fill="#e8ecf1">救護車滾動綠廊</text>
+  <text x="778" y="298" font-size="12" fill="#8b95a3">同時只優先化一個路口</text>
+  <text x="778" y="315" font-size="12" fill="#8b95a3">車輛通過即還原</text>
+
+  <rect x="760" y="336" width="290" height="78" rx="10" fill="#16191c" stroke="#30d158" stroke-opacity="0.45"/>
+  <text x="778" y="366" font-size="14.5" fill="#e8ecf1">行人安全下限</text>
+  <text x="778" y="388" font-size="12" fill="#6fdc8c">淨空 8 秒為硬約束</text>
+  <text x="778" y="405" font-size="12" fill="#6fdc8c">不因疏通車流被壓縮</text>
+
+  <rect x="760" y="426" width="290" height="78" rx="10" fill="#16191c" stroke="#2a3038"/>
+  <text x="778" y="456" font-size="14.5" fill="#e8ecf1">資源調度與搶佔</text>
+  <text x="778" y="478" font-size="12" fill="#8b95a3">只能高搶低 · 雙邊留稽核</text>
+  <text x="778" y="495" font-size="12" fill="#8b95a3">資源釋放後自動回填</text>
+
+  <rect x="760" y="516" width="290" height="78" rx="10" fill="#16191c" stroke="#2a3038"/>
+  <text x="778" y="546" font-size="14.5" fill="#e8ecf1">通知生命週期</text>
+  <text x="778" y="568" font-size="12" fill="#8b95a3">草稿 → 待審 → 核准 → 派送</text>
+  <text x="778" y="585" font-size="12" fill="#8b95a3">→ 送達確認 → 重試</text>
+
+  <rect x="760" y="606" width="290" height="78" rx="10" fill="#16191c" stroke="#2a3038"/>
+  <text x="778" y="636" font-size="14.5" fill="#e8ecf1">民眾四語告警</text>
+  <text x="778" y="658" font-size="12" fill="#8b95a3">依裝置語言自動切換</text>
+  <text x="778" y="675" font-size="12" fill="#8b95a3">中 · 英 · 日 · 韓</text>
+
+  <!-- ===== 群四 ===== -->
+  <rect x="1110" y="150" width="290" height="76" rx="12" fill="#1d2126" stroke="#2a3038"/>
+  <rect x="1126" y="166" width="28" height="28" rx="8" fill="#007afc"/>
+  <text x="1140" y="185" font-size="15" font-weight="600" fill="#ffffff" text-anchor="middle">4</text>
+  <text x="1166" y="182" font-size="16" font-weight="600" fill="#e8ecf1">可稽核性與 Agent</text>
+  <text x="1166" y="204" font-size="12.5" fill="#8b95a3">「我憑什麼信你」</text>
+
+  <rect x="1110" y="246" width="290" height="78" rx="10" fill="#16191c" stroke="#2a3038"/>
+  <text x="1128" y="276" font-size="14.5" fill="#e8ecf1">Tool-Calling Agent</text>
+  <text x="1128" y="298" font-size="12" fill="#8b95a3">七個唯讀工具 · 上限五輪</text>
+  <text x="1128" y="315" font-size="12" fill="#8b95a3">引用出自呼叫軌跡</text>
+
+  <rect x="1110" y="336" width="290" height="78" rx="10" fill="#16191c" stroke="#2a3038"/>
+  <text x="1128" y="366" font-size="14.5" fill="#e8ecf1">LLM 文字護欄</text>
+  <text x="1128" y="388" font-size="12" fill="#8b95a3">缺關鍵字串即退回樣板</text>
+  <text x="1128" y="405" font-size="12" fill="#8b95a3">數字不可被改寫</text>
+
+  <rect x="1110" y="426" width="290" height="78" rx="10" fill="#16191c" stroke="#2a3038"/>
+  <text x="1128" y="456" font-size="14.5" fill="#e8ecf1">決策軌跡與歸因</text>
+  <text x="1128" y="478" font-size="12" fill="#8b95a3">11 步狀態機 · 規則歸因</text>
+  <text x="1128" y="495" font-size="12" fill="#8b95a3">分事件 / 背景 / 計算三類</text>
+
+  <rect x="1110" y="516" width="290" height="78" rx="10" fill="#16191c" stroke="#2a3038"/>
+  <text x="1128" y="546" font-size="14.5" fill="#e8ecf1">資料雜湊與日誌</text>
+  <text x="1128" y="568" font-size="12" fill="#8b95a3">資料集 SHA256 · 六類日誌</text>
+  <text x="1128" y="585" font-size="12" fill="#8b95a3">含每次 LLM 呼叫紀錄</text>
+
+  <rect x="1110" y="606" width="290" height="78" rx="10" fill="#16191c" stroke="#2a3038"/>
+  <text x="1128" y="636" font-size="14.5" fill="#e8ecf1">證據契約</text>
+  <text x="1128" y="658" font-size="12" fill="#8b95a3">附情境雜湊與重播 ID</text>
+  <text x="1128" y="675" font-size="12" fill="#8b95a3">同輸入必得同輸出</text>
+
+  <!-- ===== 決策閘門 ===== -->
+  <rect x="60" y="810" width="1340" height="64" rx="12" fill="#16191c" stroke="#007afc" stroke-opacity="0.45"/>
+  <rect x="60" y="810" width="4" height="64" rx="2" fill="#007afc"/>
+  <text x="88" y="848" font-size="16" font-weight="600" fill="#007afc">決策閘門</text>
+  <text x="176" y="848" font-size="13.5" fill="#a8b2bf">綠廊、告警、調度建議全部停在指揮官的核准按鈕前 — LLM 沒有發布或派遣工具，越權在物理上不可能發生</text>
+</svg>
