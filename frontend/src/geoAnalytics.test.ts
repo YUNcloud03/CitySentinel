@@ -48,4 +48,3 @@ describe("geospatial evidence", () => {
     expect(impact.features[0].geometry.coordinates[0].length).toBeGreaterThan(40);
   });
 });
-

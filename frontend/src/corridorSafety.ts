@@ -36,4 +36,3 @@ export function corridorSafetyViolations(result: CorridorSafetyInput): string[] 
   if (activeIntersections.size > 1) violations.push("more than one intersection has emergency green");
   return violations;
 }
-

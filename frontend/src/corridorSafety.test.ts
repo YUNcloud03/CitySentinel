@@ -48,4 +48,3 @@ describe("green corridor safety invariants", () => {
     expect(corridorSafetyViolations(corridor)).toContain("more than one intersection has emergency green");
   });
 });
-
