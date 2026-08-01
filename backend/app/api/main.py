@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException
@@ -12,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 
 from ..coordinator.coordinator import Coordinator, DataBundle
+from ..coordinator.green_corridor import corridor_state_at, simulate_green_corridor
 from ..coordinator.whatif import run_what_if
 from ..coordinator.decision_sandbox import run_decision_sandbox
 from ..coordinator.whatif_nl import parse_question
@@ -19,6 +21,14 @@ from ..llm import advisor, generator
 from ..llm.agent import AdvisorAgent
 from ..llm.client import CALL_LOG, get_provider
 from ..simulation.player import SimulationPlayer
+from ..engines.signal_timing import calculate_signal_plan
+from ..audit import (
+    confidence_contract,
+    coordinator_contract,
+    data_quality_report,
+    dataset_usage_report,
+    simulation_contract,
+)
 
 app = FastAPI(title="城市應變分析 AI Command Center", version="0.1.0")
 app.add_middleware(
@@ -63,6 +73,23 @@ class DecisionSandboxRequest(BaseModel):
     disruption: str = "none"
     disruption_segment_id: str | None = None
     disruption_load: float | None = None
+
+
+class GreenCorridorRequest(BaseModel):
+    at: str
+    origin_segment_id: str
+    destination_segment_id: str
+    vehicle_type: Literal["Ambulance", "FireEngine"] = "Ambulance"
+    blocked_segment_ids: list[str] = Field(default_factory=list)
+
+
+class GreenCorridorApprovalRequest(BaseModel):
+    approved_by: str = Field(default="指揮官", min_length=2, max_length=64)
+
+
+class SignalTimingRequest(BaseModel):
+    at: str
+    segment_ids: list[str] = Field(min_length=2, max_length=4)
 
 
 # ---- 基礎資料 ----
@@ -151,6 +178,34 @@ def simulation_timeline():
     return {"timestamps": [format_ts(t) for t in stamps], "markers": markers}
 
 
+@app.get("/api/audit/simulation")
+def simulation_audit():
+    """Dataset time contract, initialization policy, and deterministic replay hash."""
+    return simulation_contract(bundle)
+
+
+@app.get("/api/audit/dataset-usage")
+def dataset_usage_audit():
+    """Trace every organizer-provided file to the runtime features that consume it."""
+    return {"datasets": dataset_usage_report()}
+
+
+@app.get("/api/audit/data-quality")
+def data_quality_audit():
+    """Machine-readable before/after counts and quality checks; no silent cleaning."""
+    return data_quality_report(bundle)
+
+
+@app.get("/api/audit/confidence")
+def confidence_audit():
+    return confidence_contract()
+
+
+@app.get("/api/audit/coordinator")
+def coordinator_audit():
+    return coordinator_contract()
+
+
 # ---- 16.3–16.4 事件注入 ----
 
 @app.post("/api/incidents/inject")
@@ -184,7 +239,10 @@ def get_incident(incident_id: str):
 
 @app.post("/api/what-if")
 def what_if(req: WhatIfRequest):
-    return run_what_if(bundle, req.model_dump(exclude_none=True))
+    try:
+        return run_what_if(bundle, req.model_dump(exclude_none=True))
+    except KeyError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/api/decision-sandbox")
@@ -194,6 +252,74 @@ def decision_sandbox(req: DecisionSandboxRequest):
         return run_decision_sandbox(bundle, req.model_dump(exclude_none=True))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/signal-timing/calculate")
+def signal_timing(req: SignalTimingRequest):
+    """Compute the next cycle from traceable road-level demand inputs."""
+    from ..data_loader import parse_ts
+    try:
+        return calculate_signal_plan(bundle, parse_ts(req.at), req.segment_ids)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/green-corridor/simulate")
+def green_corridor(req: GreenCorridorRequest):
+    """Build a deterministic emergency signal-preemption proposal.
+
+    The result is simulation-only and always requires human approval before any
+    real signal, dispatch, or public-notification operation.
+    """
+    try:
+        result = simulate_green_corridor(bundle, req.model_dump())
+        green_corridor_runs[result["scenario_id"]] = result
+        return result
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+green_corridor_runs: dict[str, dict] = {}
+
+
+@app.get("/api/green-corridor/runs")
+def green_corridor_history():
+    return list(green_corridor_runs.values())
+
+
+@app.post("/api/green-corridor/{scenario_id}/approve")
+def approve_green_corridor(scenario_id: str, req: GreenCorridorApprovalRequest):
+    result = green_corridor_runs.get(scenario_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"救援走廊 {scenario_id} 不存在")
+    if result["approval_status"] == "APPROVED_FOR_SIMULATION":
+        return result
+    approved_at = datetime.now().isoformat(timespec="seconds")
+    result["approval_status"] = "APPROVED_FOR_SIMULATION"
+    result["approved_by"] = req.approved_by
+    result["approved_at"] = approved_at
+    result["runtime_state"] = corridor_state_at(result, 0, approved=True)
+    result["decision_trace"].append({
+        "step": "SIMULATION_ACTIVATED",
+        "detail": {"approved_by": req.approved_by, "approved_at": approved_at},
+    })
+    return result
+
+
+@app.get("/api/green-corridor/{scenario_id}/state")
+def green_corridor_state(scenario_id: str, elapsed_seconds: int = 0):
+    result = green_corridor_runs.get(scenario_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"救援走廊 {scenario_id} 不存在")
+    if elapsed_seconds < 0:
+        raise HTTPException(status_code=422, detail="elapsed_seconds 不可小於 0")
+    state = corridor_state_at(result, elapsed_seconds)
+    result["runtime_state"] = state
+    return state
 
 
 class WhatIfNLRequest(BaseModel):
@@ -253,6 +379,9 @@ class CustomIncidentRequest(BaseModel):
     severity: Literal["Critical", "High", "Medium", "Low"]
     location: str = ""
     description: str = ""
+    source_type: Literal["official", "operator", "iot", "camera", "citizen", "unknown"] = "operator"
+    source_id: str = "dashboard-operator"
+    human_confirmed: bool = True
     timestamp: str = Field(pattern=r"^2026-05-20 ([01]\d|2[0-3]):[0-5]\d$")
 
     @field_validator("affected_segment")
@@ -437,6 +566,7 @@ def provenance():
     import hashlib
 
     from ..config import ROAD_NETWORK_JSON
+    from ..coordinator import green_corridor as gc
     from ..engines import confidence as ce
     from ..engines import ete_calculator as ete
     from ..engines import routing_engine as re_
@@ -458,6 +588,13 @@ def provenance():
                     "懲罰係數": ete.PENALTY_FACTOR},
             "信心分數": {"車速崩跌_kmh": ce.SPEED_COLLAPSE_KMH,
                         "人流異常成長率": ce.CROWD_ANOMALY_GROWTH},
+            "綠色救援走廊": {
+                "一般號誌平均延誤秒": gc.BASE_SIGNAL_DELAY_SECONDS,
+                "走廊號誌平均延誤秒": gc.CORRIDOR_SIGNAL_DELAY_SECONDS,
+                "走廊最低速度_kmh": gc.MIN_CORRIDOR_SPEED_KMH,
+                "走廊最高速度_kmh": gc.MAX_CORRIDOR_SPEED_KMH,
+                "行人清空秒數": gc.PEDESTRIAN_CLEARANCE_SECONDS,
+            },
         },
         "note": "所有判定與計算皆由確定性引擎執行，可依上述門檻與原始資料重算驗證。",
     }

@@ -391,8 +391,14 @@ export function CoordinatorSummaryCard({ incident }: { incident: IncidentState }
     <div className="coord-summary">
       <div className="cs-head">🎯 Coordinator 判定</div>
       <div className="cs-verdict">{s.verdict}</div>
-      <div className="cs-row"><span className="cs-label">行動</span>
-        <span>{s.actions.join("、")}</span></div>
+      <div className="cs-row"><span className="cs-label">影響</span>
+        <span>{s.impact ?? "尚待評估"}</span></div>
+      <div className="cs-row"><span className="cs-label">建議</span>
+        <span>{s.recommendation ?? s.actions.join("、")}</span></div>
+      <div className="cs-row"><span className="cs-label">代價</span>
+        <span>{s.tradeoffs ?? "尚待評估"}</span></div>
+      <div className="cs-row"><span className="cs-label">改善</span>
+        <span>{s.expected_improvement ?? "尚未模擬"}</span></div>
       <div className="cs-row"><span className="cs-label">升級條件</span>
         <span>{s.escalation}</span></div>
       <div className="cs-row"><span className="cs-label">依據</span>

@@ -57,20 +57,20 @@ def build_coordinator_summary(state: dict) -> dict:
         actions.append(f"主疏散改道{primary['name']}{note}")
     police = next((a for a in dispatch.get("actions", []) if a["resource_type"] == "Police"), None)
     if police:
-        actions.append(f"派遣 {police['fulfilled_count']} 名交通警力")
+        actions.append(f"建議配置 {police['fulfilled_count']} 名交通警力（待核准）")
     if 3 in caused:
-        actions.append("啟動捷運過站不停與接駁分流")
+        actions.append("建議捷運過站不停與接駁分流（待核准）")
     if 5 in caused:
-        actions.append("每路口配置警力人工指揮")
+        actions.append("建議每路口配置警力人工指揮（待核准）")
     if not actions:
         actions.append("維持局部監測")
 
     if dispatch.get("has_shortfall"):
         escalation = "資源存在缺口，需人工升級調度或跨區支援（不得標示為已達成）"
     elif 6 in state.get("triggered_rules", []):
-        escalation = "區域漫遊率達門檻，已啟動全區多語推播"
+        escalation = "區域漫遊率達門檻，建議全區多語推播（待核准）"
     else:
-        escalation = "若 5 分鐘內受影響路段飽和度未降至門檻以下，升級全區多語推播"
+        escalation = "持續監測新快照，若惡化則重新評估；目前未啟用自動五分鐘升級計時器"
 
     basis_parts = [f"SOP {'、'.join(map(str, caused))}"] if caused else []
     if ete.get("ete_minutes_display"):
@@ -79,7 +79,35 @@ def build_coordinator_summary(state: dict) -> dict:
         basis_parts.append(f"{len(conf['evidence'])} 項多源佐證")
     basis = "；".join(basis_parts) or "SOP Rule Engine 判定"
 
-    return {"verdict": verdict, "actions": actions, "escalation": escalation, "basis": basis}
+    affected = (routing.get("affected_segment") or {}).get("name") or event.get("affected_segment", "—")
+    requested = sum(action.get("requested_count", 0) for action in dispatch.get("actions", []))
+    fulfilled = sum(action.get("fulfilled_count", 0) for action in dispatch.get("actions", []))
+    tradeoffs = (
+        f"資源需求 {requested}、目前可配置 {fulfilled}；缺口需跨區或抽調"
+        if dispatch.get("has_shortfall")
+        else f"資源需求 {requested}、目前可配置 {fulfilled}；所有動作仍待核准"
+    ) if dispatch else "目前沒有資源配置方案"
+    expected = "尚未執行處置方案模擬，不能宣稱已有改善；請比較方案 A/B 後再核准"
+    evidence_contract = {
+        "data": {"snapshot_at": state.get("as_of"), "event_id": state.get("incident_id"),
+                 "affected": affected},
+        "rules": sorted(caused),
+        "formula": ete.get("formula"),
+        "simulation": None,
+        "claim_status": "proposed",
+    }
+    return {
+        "verdict": verdict,
+        "situation": verdict,
+        "impact": f"影響 {affected}" + (f"；預估處理時間 {ete['ete_minutes_display']} 分" if ete.get("ete_minutes_display") else ""),
+        "actions": actions,
+        "recommendation": "、".join(actions),
+        "tradeoffs": tradeoffs,
+        "expected_improvement": expected,
+        "escalation": escalation,
+        "basis": basis,
+        "evidence_contract": evidence_contract,
+    }
 
 
 class DataBundle:
@@ -185,7 +213,7 @@ class Coordinator:
                 "context_rules": context_rules,
             })
 
-            # CONFIDENCE_ASSESSED：多源可信度（僅供參考，不參與判定）
+            # CONFIDENCE_ASSESSED：多源可信度與執行閘門
             state["confidence"] = confidence_engine.assess_confidence(
                 incident, traffic_snap, crowd_snap, self.bundle.network
             )
@@ -193,6 +221,8 @@ class Coordinator:
                 "score": state["confidence"]["confidence_score"],
                 "level": state["confidence"]["level"],
                 "signals": len(state["confidence"]["evidence"]),
+                "source": state["confidence"]["source"],
+                "execution_policy": state["confidence"]["execution_policy"],
             })
 
             # ROUTE_PLANNED（SOP 2 觸發才需要）
@@ -242,7 +272,8 @@ class Coordinator:
                 state["routing_result"],
                 self.bundle.network,
             )
-            if requirements:
+            reservation_allowed = state["confidence"]["execution_policy"]["resource_reservation_allowed"]
+            if requirements and reservation_allowed:
                 dispatch = dispatch_engine.plan_dispatch(
                     self.bundle.registry, requirements, snapshot_id,
                     severity=incident.get("severity", "Medium"),
@@ -263,7 +294,15 @@ class Coordinator:
                     ),
                 })
             else:
-                step("DISPATCH_PLANNED", {"skipped": "此事件無需資源調度"})
+                reason = (
+                    "可信度閘門禁止保留資源；僅允許監測或人工確認"
+                    if requirements and not reservation_allowed
+                    else "此事件無需資源調度"
+                )
+                step("DISPATCH_PLANNED", {
+                    "skipped": reason,
+                    "execution_policy": state["confidence"]["execution_policy"]["code"],
+                })
 
             # 重新注入釋出的資源可能可回填其他事件的缺口
             self._rebalance()

@@ -19,6 +19,8 @@ def test_operator_actions_improve_focus_without_mutating_bundle():
     assert result["production_state_modified"] is False
     assert bundle.traffic[0] is original
     assert len(result["series"]) == 5
+    assert result["signal_plan"]["approaches"]
+    assert result["evidence_contract"]["simulation"]["model"] == "deterministic-v1"
 
 
 def test_custom_disruption_can_be_layered_on_a_plan():

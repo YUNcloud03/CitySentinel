@@ -204,6 +204,9 @@ python -m pytest tests -q
 | `GET /api/incidents/{id}/decision-trace` | 決策鏈（規則、路徑、排除理由、ETE、SOP 原文） |
 | `GET /api/incidents/{id}/notifications` | CMS 與多語通報 |
 | `POST /api/what-if` | Sandbox 假設分析（結構化 overrides） |
+| `POST /api/green-corridor/simulate` | 依路網、車速、官方道路與號誌計算救援綠廊提案 |
+| `POST /api/green-corridor/{id}/approve` | 人工核准並啟動模擬號誌優先（不修改正式號誌） |
+| `GET /api/green-corridor/runs` | 救援走廊方案與核准紀錄 |
 | `GET /api/road-network` / `sop` / `health` | 基礎資料 |
 
 ## 已驗證的 Demo 場景
@@ -216,6 +219,7 @@ python -m pytest tests -q
 | 松高路號誌故障 (EVT_003) | 觸發 SOP 5：人工指揮、每路口 2 警力；ETE = 41 分 |
 | 多語通報 | 台北101 漫遊 45% 觸發 SOP 6，中英日韓同步產出 |
 | What-if | BL17 覆寫 40,000 人 → sandbox 觸發 SOP 3，正式狀態不變 |
+| 救護車綠色走廊 | 避開忠孝東路事故，6 路段、25 個官方號誌；ETA 20 → 10 分，核准前不啟動號誌優先 |
 
 ## 專案結構
 
@@ -231,9 +235,10 @@ backend/app/
 ├─ retrievers/sop_retriever.py  # 依 rule_id 精準取 SOP 原文
 ├─ coordinator/
 │  ├─ coordinator.py     # 事件工作流狀態機 + decision trace
+│  ├─ green_corridor.py  # 救援路徑、號誌預控、ETA 與四語推播
 │  └─ whatif.py          # Sandbox 假設分析
 ├─ simulation/player.py  # 時序播放器
 └─ api/main.py           # FastAPI 端點
 data/raw/                # 官方資料（authoritative，見 data/DATA_NOTES.md）
-tests/                   # 30 項單元＋整合測試
+tests/                   # 114 項單元＋整合測試
 ```

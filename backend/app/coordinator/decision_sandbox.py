@@ -6,8 +6,11 @@ traffic snapshot and returns both map-ready projections and comparison metrics.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from ..data_loader import parse_ts
 from ..engines.rule_engine import classify_congestion
+from ..engines.signal_timing import calculate_signal_plan
 from .coordinator import DataBundle
 
 
@@ -157,7 +160,7 @@ def run_decision_sandbox(bundle: DataBundle, scenario: dict) -> dict:
     else:
         verdict = "不建議：在目前突發條件下，方案未改善目標路段。"
 
-    return {
+    result = {
         "scenario_name": scenario.get("name", "未命名方案"),
         "as_of": scenario["at"],
         "focus_segment_id": focus_id,
@@ -174,3 +177,20 @@ def run_decision_sandbox(bundle: DataBundle, scenario: dict) -> dict:
         "model": "deterministic-v1",
         "production_state_modified": False,
     }
+    if any(action.get("type") == "extend_green" for action in scenario.get("actions", [])):
+        approach_ids = [focus_id, *bundle.network[focus_id].alternatives[:3]]
+        result["signal_plan"] = calculate_signal_plan(bundle, at, approach_ids)
+    else:
+        result["signal_plan"] = None
+    result["evidence_contract"] = {
+        "data": ["city_traffic_flow.csv", "signaling_crowd_density.csv", "road_network_geometry.json"],
+        "formula": "decision-sandbox deterministic-v1 coefficients; signal timing formula attached when used",
+        "rules": [],
+        "simulation": {"model": result["model"], "production_state_modified": False},
+    }
+    scenario_json = json.dumps(scenario, ensure_ascii=False, sort_keys=True, default=str)
+    baseline_json = json.dumps(baseline, ensure_ascii=False, sort_keys=True, default=str)
+    result["evidence_contract"]["scenario_sha256"] = hashlib.sha256(scenario_json.encode()).hexdigest()
+    result["evidence_contract"]["baseline_snapshot_sha256"] = hashlib.sha256(baseline_json.encode()).hexdigest()
+    result["simulation_run_id"] = f"DECISION-{result['evidence_contract']['scenario_sha256'][:12]}"
+    return result

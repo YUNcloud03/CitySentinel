@@ -58,10 +58,25 @@ class NotificationCenter:
     def create_from_incident(self, incident_state: dict) -> dict:
         self._seq += 1
         noti = incident_state.get("notifications", {})
+        policy = ((incident_state.get("confidence") or {}).get("execution_policy") or {}).get(
+            "code", "ACTION_PROPOSED"
+        )
+        if policy == "ACTION_PROPOSED":
+            status, channels, history_note = (
+                "READY_FOR_APPROVAL", list(CHANNELS), "等待管理者核准"
+            )
+        elif policy == "HUMAN_CONFIRMATION_REQUIRED":
+            status, channels, history_note = (
+                "PENDING_CONFIRMATION", ["Dashboard"], "可信度不足，需先人工確認；禁止對外發布"
+            )
+        else:
+            status, channels, history_note = (
+                "MONITOR_ONLY", ["Dashboard"], "低可信事件僅供內部監測；禁止對外發布"
+            )
         notification = {
             "notification_id": f"NOTI-{datetime.now():%Y%m%d}-{self._seq:03d}",
             "incident_id": incident_state["incident_id"],
-            "channels": list(CHANNELS),
+            "channels": channels,
             "target_area": "信義計畫區",
             "languages": list((noti.get("messages") or {}).keys()) or ["zh", "en"],
             "cms": noti.get("cms"),
@@ -71,13 +86,14 @@ class NotificationCenter:
                 "cms": (noti.get("cms_meta") or {}).get("source"),
                 "messages": (noti.get("messages_meta") or {}).get("source"),
             },
-            "status": "READY_FOR_APPROVAL",  # 生成即草稿完成，待核准
+            "status": status,
             "deliveries": None,
             "created_at": _now(),
             "history": [
                 {"status": "DRAFTED", "at": _now(), "note": "內容由系統生成"},
-                {"status": "READY_FOR_APPROVAL", "at": _now(), "note": "等待管理者核准"},
+                {"status": status, "at": _now(), "note": history_note},
             ],
+            "execution_policy": policy,
         }
         self._store[notification["notification_id"]] = notification
         return notification

@@ -137,6 +137,16 @@ export default function DecisionSandbox({ selectedSegmentId, view, onPreview }: 
         <div className="sim-series" aria-label="二十分鐘飽和度趨勢">
           {result.series.map((p) => <i key={p.minute} title={`${p.minute} 分鐘：${p.focus_saturation}`} style={{ height: `${Math.max(12, p.focus_saturation * 70)}px` }}><span>{p.minute}</span></i>)}
         </div>
+        {result.signal_plan && <div className="signal-plan-proof">
+          <b>下一輪智慧號誌｜{result.signal_plan.cycle_seconds} 秒</b>
+          {result.signal_plan.approaches.map((approach) => (
+            <div key={approach.segment_id}>
+              <span>{approach.name}</span><strong>{approach.next_green_seconds}s</strong>
+              <small>需求 {approach.demand_score.toFixed(2)}｜安全下限 {approach.safety_minimum_green_seconds}s</small>
+            </div>
+          ))}
+          <p>{result.signal_plan.formula}</p>
+        </div>}
         <div className="sim-proof">規則式交通模型 v1｜未使用 LLM｜每項措施與假設皆可追溯</div>
       </div>}
 

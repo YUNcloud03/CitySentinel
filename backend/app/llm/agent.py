@@ -17,6 +17,7 @@ LLM 在迴圈中**自主決定**呼叫哪些工具、以什麼參數、何時停
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import time
 from datetime import datetime
@@ -381,11 +382,18 @@ class AdvisorAgent:
         for _ in range(MAX_ITERS):
             kind, payload = self._llm_step(messages)
             if kind == "final":
-                answer = payload
+                if not trace:
+                    answer = "目前尚未取得可驗證工具證據，不能提供數字、路線、資源或 SOP 結論。"
+                else:
+                    answer = payload
                 break
             for call_id, name, args in payload:
                 result = self._execute_tool(name, args)
-                trace.append({"tool": name, "args": args,
+                canonical_args = json.dumps(args, ensure_ascii=False, sort_keys=True, default=str)
+                canonical_result = json.dumps(result, ensure_ascii=False, sort_keys=True, default=str)
+                trace.append({"call_id": call_id, "tool": name, "args": args,
+                              "args_sha256": hashlib.sha256(canonical_args.encode()).hexdigest(),
+                              "result_sha256": hashlib.sha256(canonical_result.encode()).hexdigest(),
                               "summary": self._summarize(name, result)})
                 if provider == "anthropic":
                     self._append_tool_result_anthropic(messages, call_id, result)
@@ -395,6 +403,7 @@ class AdvisorAgent:
             answer = "已達工具呼叫上限，以下為目前查證到的資訊摘要：" + \
                      "；".join(t["summary"] for t in trace[-3:])
 
+        validation = "VERIFIED_TOOL_GROUNDED" if trace else "REJECTED_NO_EVIDENCE"
         return {
             "available": True,
             "answer": answer,
@@ -402,6 +411,13 @@ class AdvisorAgent:
             "tool_trace": trace,
             "iterations": len(trace),
             "provider": provider,
+            "evidence_contract": {
+                "version": "v1",
+                "validation_status": validation,
+                "tool_result_hashes": [row["result_sha256"] for row in trace],
+                "claim_status": "advisory_only",
+                "external_execution_allowed": False,
+            },
         }
 
     # ---- 引用推導（不信任 LLM 自報：以工具軌跡為準，再與文字交叉） ----
@@ -416,6 +432,4 @@ class AdvisorAgent:
                 m = re.findall(r"\[([0-9, ]+)\]", t["summary"])
                 for group in m:
                     cited.update(int(x) for x in re.findall(r"[1-7]", group))
-        for m in re.finditer(r"SOP\s*([1-7])", answer):
-            cited.add(int(m.group(1)))
         return sorted(c for c in cited if 1 <= c <= 7)

@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import tempfile
 import zipfile
 from pathlib import Path
 
@@ -20,13 +19,17 @@ SEGMENTS = {
     "RD_TPE_003": {"names": ("基隆路一段", "基隆路二段"), "axis": 1, "bounds": (121.5588, 25.0323, 121.5646, 25.0412), "controls": ("SHKQD10", "SJERC10")},
     "RD_TPE_004": {"names": ("市民大道四段",), "axis": 0, "bounds": (121.5436, 25.0442, 121.5579, 25.0452), "controls": ("SK8M710", "SKAPX10")},
     "RD_TPE_005": {"names": ("仁愛路四段",), "axis": 0, "bounds": (121.5486, 25.0370, 121.5638, 25.0381), "controls": ("SIMN810", "SIKR710")},
-    "RD_TPE_006": {"names": ("敦化南路一段",), "axis": 1, "bounds": (121.5484, 25.0376, 121.5492, 25.0450), "controls": ("SIMN810", "SJGPQ10")},
+    # The challenge identifies these as whole named road sections.  Keep the
+    # complete official GIS chain instead of clipping it to the original demo
+    # viewport; clipping created a false gap between sections 1 and 2 and left
+    # only three blocks of Dunhua South Road Section 2 on the map.
+    "RD_TPE_006": {"names": ("敦化南路一段",), "axis": 1, "bounds": (121.5484, 25.0331, 121.5492, 25.0450), "controls": ("SIMN810", "SJGPQ10", "SHLN710")},
     "RD_TPE_007": {"names": ("松高路",), "axis": 0, "bounds": (121.5623, 25.0388, 121.5657, 25.0396), "controls": ("SIWR710", "SIWRJ10")},
     "RD_TPE_008": {"names": ("延吉街",), "axis": 1, "bounds": (121.5542, 25.0375, 121.5558, 25.0416), "controls": ("SILPI10", "SJGPC10")},
     "RD_TPE_009": {"names": ("基隆路一段",), "axis": 1, "bounds": (121.5642, 25.0410, 121.5700, 25.0500), "controls": ("SJERC10",)},
     "RD_TPE_010": {"names": ("市府路",), "axis": 1, "bounds": (121.5632, 25.0357, 121.5639, 25.0393), "controls": ("SI9R710", "SIKR710", "SIWR710")},
     "RD_TPE_011": {"names": ("松壽路",), "axis": 0, "bounds": (121.5611, 25.0356, 121.5657, 25.0362), "controls": ("SI9QP10", "SI9R710", "SI9RI10")},
-    "RD_TPE_012": {"names": ("敦化南路二段",), "axis": 1, "bounds": (121.5484, 25.0297, 121.5492, 25.0331), "controls": ()},
+    "RD_TPE_012": {"names": ("敦化南路二段",), "axis": 1, "bounds": (121.5484, 25.0218, 121.5492, 25.0334), "controls": ("SHLN710",)},
     "RD_TPE_013": {"names": ("信義路五段",), "axis": 0, "bounds": (121.5603, 25.0325, 121.5694, 25.0333), "controls": ("SHJRJ10", "SHJS610")},
     "RD_TPE_014": {"names": ("松智路",), "axis": 1, "bounds": (121.5651, 25.0327, 121.5658, 25.0393), "controls": ("SHJRJ10", "SI9RI10", "SIWRJ10")},
     "RD_TPE_015": {"names": ("復興南路一段",), "axis": 1, "bounds": (121.5434, 25.0413, 121.5441, 25.0450), "controls": ("SJHM710", "SK8M710")},
@@ -54,11 +57,12 @@ def main() -> None:
     args = parser.parse_args()
 
     controls = read_signal_controls(args.signals_csv)
-    with tempfile.TemporaryDirectory() as temp_dir:
-        with zipfile.ZipFile(args.road_zip) as archive:
-            archive.extractall(temp_dir)
-        dbf_path = next(Path(temp_dir).rglob("Road.dbf"))
-        rows = read_dbf(dbf_path)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    # Only the DBF is needed. Reading that member explicitly avoids inheriting
+    # directory permissions stored in the ZIP and works in restricted builds.
+    with zipfile.ZipFile(args.road_zip) as archive:
+        member = next(name for name in archive.namelist() if name.lower().endswith("road.dbf"))
+        rows = read_dbf(archive.read(member))
 
     features = []
     for segment_id, spec in SEGMENTS.items():
@@ -103,7 +107,6 @@ def main() -> None:
         },
         "features": features,
     }
-    args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"roads.json: {len(features)} official-aligned segments")
 

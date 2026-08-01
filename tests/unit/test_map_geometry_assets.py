@@ -42,6 +42,24 @@ def test_keelung_junction_uses_official_signal_coordinate():
     assert [121.567, 25.0416] not in roads["RD_TPE_001"]
 
 
+def test_dunhua_sections_use_the_complete_official_named_sections():
+    data = json.loads((ROOT / "frontend/src/data/roads.json").read_text(encoding="utf-8"))
+    roads = {
+        feature["properties"]["segment_id"]: feature["geometry"]["coordinates"]
+        for feature in data["features"]
+    }
+
+    # Section 1 reaches south of Renai Road and section 2 continues past
+    # Heping East Road.  These bounds prevent the old viewport clipping from
+    # silently turning either organizer road ID into a short demo fragment.
+    assert min(point[1] for point in roads["RD_TPE_006"]) < 25.034
+    assert min(point[1] for point in roads["RD_TPE_012"]) < 25.023
+    assert len(roads["RD_TPE_006"]) >= 10
+    assert len(roads["RD_TPE_012"]) >= 8
+    assert [121.548802, 25.033249] in roads["RD_TPE_006"]
+    assert [121.548802, 25.033249] in roads["RD_TPE_012"]
+
+
 def test_each_selected_signal_is_within_declared_corridor():
     roads_data = json.loads((ROOT / "frontend/src/data/roads.json").read_text(encoding="utf-8"))
     signals_data = json.loads((ROOT / "frontend/public/data/signals.geojson").read_text(encoding="utf-8"))
