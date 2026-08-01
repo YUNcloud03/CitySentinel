@@ -63,7 +63,13 @@ def build_coordinator_summary(state: dict) -> dict:
     if police:
         actions.append(f"建議配置 {police['fulfilled_count']} 名交通警力（待核准）")
     if 3 in caused:
-        actions.append("建議捷運過站不停與接駁分流（待核准）")
+        affected_segment = event.get("affected_segment", "")
+        if affected_segment == rule_engine.MRT_STATION:
+            actions.append("建議捷運過站不停與接駁分流（待核准）")
+        elif affected_segment.startswith("BS_MRT_"):
+            actions.append("建議站內入口管制、列車疏運與替代運輸（待核准）")
+        else:
+            actions.append("建議場館出入口單向分流與接駁疏運（待核准）")
     if 5 in caused:
         actions.append("建議每路口配置警力人工指揮（待核准）")
     if not actions:
@@ -160,6 +166,7 @@ class Coordinator:
         incident: dict,
         at: datetime | None = None,
         roaming_override_pct: float | None = None,
+        crowd_overrides: dict | None = None,
     ) -> dict:
         """處理事件。
 
@@ -210,11 +217,19 @@ class Coordinator:
 
             traffic_snap = self.bundle.traffic_at(at)
             crowd_snap = self.bundle.crowd_at(at)
+            if crowd_overrides:
+                crowd_snap, assumption = self._apply_crowd_override(
+                    crowd_snap,
+                    incident.get("affected_segment", ""),
+                    crowd_overrides,
+                )
+                state["assumptions"] = [assumption]
+                step("ASSUMPTION_APPLIED", assumption)
             if roaming_override_pct is not None:
                 crowd_snap, assumption = self._apply_roaming_override(
                     crowd_snap, roaming_override_pct
                 )
-                state["assumptions"] = [assumption]
+                state.setdefault("assumptions", []).append(assumption)
                 step("ASSUMPTION_APPLIED", assumption)
 
             # RULE_EVALUATED：事件規則 + 當下人流規則（同一時間切面）
@@ -349,7 +364,27 @@ class Coordinator:
             self._rebalance()
 
             # SOP_RETRIEVED
-            state["sop_evidence"] = self.bundle.sop.retrieve(state["triggered_rules"] + [7] if state["ete_result"] else state["triggered_rules"])
+            requested_rule_ids = state["triggered_rules"] + ([7] if state["ete_result"] else [])
+            generic_crowd_policy = any(
+                trigger.get("evidence", {}).get("policy_code")
+                == rule_engine.GENERIC_CROWD_POLICY_CODE
+                for trigger in triggers
+            )
+            official_rule_ids = [
+                rule_id for rule_id in requested_rule_ids
+                if not (generic_crowd_policy and rule_id == 3)
+            ]
+            state["sop_evidence"] = self.bundle.sop.retrieve(official_rule_ids)
+            if generic_crowd_policy:
+                state["sop_evidence"].append({
+                    "rule_id": 3,
+                    "title": "單站人潮異常分流政策",
+                    "text": (
+                        "競賽需求範例：單站人流 5 分鐘增幅達 50% 時，"
+                        "啟動場站分流、警力維持緊急通道及接駁疏運建議。"
+                    ),
+                    "source": "competition_requirement",
+                })
             step("SOP_RETRIEVED", {"rule_ids": [r["rule_id"] for r in state["sop_evidence"]]})
 
             # CONTENT_GENERATED
@@ -731,6 +766,31 @@ class Coordinator:
         )
         result["messages"] = msgs if roaming_triggers else {"zh": msgs["zh"]}
         return result
+
+    @staticmethod
+    def _apply_crowd_override(
+        crowd_snap: dict,
+        station_id: str,
+        overrides: dict,
+    ) -> tuple[dict, dict]:
+        """Apply operator-entered crowd values to one copied station snapshot."""
+        if station_id not in crowd_snap:
+            raise KeyError(f"基地台 {station_id} 在目前時間沒有可用人流快照")
+        original = crowd_snap[station_id]
+        allowed = {
+            "user_count", "growth_rate", "roaming_user_pct", "stay_time_avg"
+        }
+        values = {key: value for key, value in overrides.items() if key in allowed and value is not None}
+        overridden = dict(crowd_snap)
+        overridden[station_id] = replace(original, **values)
+        return overridden, {
+            "field": "crowd_snapshot",
+            "station_id": station_id,
+            "applied": values,
+            "actual": {key: getattr(original, key) for key in values},
+            "scope": "本次判定用單一站點快照",
+            "note": "管理者輸入的人潮模擬參數；主辦方來源資料未被修改",
+        }
 
     @staticmethod
     def _apply_roaming_override(crowd_snap: dict, pct: float) -> tuple[dict, dict]:

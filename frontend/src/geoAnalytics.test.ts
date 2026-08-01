@@ -25,14 +25,25 @@ describe("geospatial evidence", () => {
           data_time: "2026-05-20 22:00",
         },
       },
+      crowd: {
+        BS_TEST: {
+          location_name: "測試場站", user_count: 20_000, growth_rate: 0.5,
+          roaming_user_pct: 45, data_time: "2026-05-20 22:00",
+        },
+      },
     };
     const grid = riskGridGeoJSON(view, [{
       properties: { segment_id: "RD_TPE_001" },
       geometry: { type: "LineString", coordinates: [[121.55, 25.04], [121.56, 25.04]] },
-    }], {}, 9);
+    }], { BS_TEST: [121.555, 25.04] }, 9);
     expect(grid.features).toHaveLength(1);
     expect(grid.features[0].properties.h3_resolution).toBe(9);
     expect(grid.features[0].properties.risk).toBeGreaterThan(.9);
+    expect(grid.features[0].properties.traffic_names).toBe("測試路");
+    expect(grid.features[0].properties.traffic_entities).toBe("RD_TPE_001");
+    expect(grid.features[0].properties.crowd_names).toBe("測試場站");
+    expect(grid.features[0].properties.crowd_risk).toBeCloseTo(.725, 3);
+    expect(grid.features[0].properties.traffic_risk).toBeGreaterThan(.9);
     expect(grid.features[0].geometry.coordinates[0].length).toBeGreaterThanOrEqual(6);
   });
 
@@ -44,7 +55,7 @@ describe("geospatial evidence", () => {
       routing_result: null, ete_result: null, dispatch: null, sop_evidence: [], notifications: {},
       decision_trace: [], errors: [],
     }, [121.55, 25.04]);
-    expect(impact.features[0].properties.radius_m).toBe(650);
+    expect(impact.features[0].properties!.radius_m).toBe(650);
     expect(impact.features[0].geometry.coordinates[0].length).toBeGreaterThan(40);
   });
 });

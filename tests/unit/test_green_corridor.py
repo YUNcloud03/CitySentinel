@@ -31,7 +31,9 @@ def test_green_corridor_is_deterministic_and_non_mutating():
     assert all(action["pedestrian_clearance_seconds"] == 8 for action in result["signal_actions"])
     assert result["approval_status"] == "READY_FOR_APPROVAL"
     assert result["production_state_modified"] is False
-    assert result["model"] == "deterministic-green-corridor-v1"
+    assert result["model"] == "deterministic-green-corridor-v2-traffic-weighted"
+    assert "saturation_score" in result["evidence"]["route_score_formula"]
+    assert all(row["route_cost_seconds"] >= row["baseline_seconds"] for row in result["route_details"])
 
 
 def test_green_corridor_avoids_operator_blocked_segment():

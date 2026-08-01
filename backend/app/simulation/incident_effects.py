@@ -120,6 +120,7 @@ def project_incident(
     accepted_actions_all = [
         action for action in dispatch_actions
         if action.get("status") in {"accepted", "adjusted"}
+        and int(action.get("fulfilled_count") or 0) > 0
         and action.get("accepted_sim_time")
         and parse_ts(action["accepted_sim_time"]) <= at
     ]
@@ -132,10 +133,34 @@ def project_incident(
         if on_scene_at <= at:
             on_scene_actions.append(action)
             on_scene_times.append(on_scene_at)
-    actionable_count = max(1, len([action for action in dispatch_actions if action.get("status") != "rejected"]))
+    actionable_actions = [
+        action for action in dispatch_actions if action.get("status") != "rejected"
+    ]
+    actionable_count = max(1, len(actionable_actions))
+
+    def action_effectiveness(action: dict) -> float:
+        """實際核配量 ÷ Agent 原建議量；增派上限 125%，避免無限放大。"""
+        recommended = max(
+            1,
+            int(action.get("agent_recommended_count") or action.get("requested_count") or 1),
+        )
+        fulfilled = max(0, int(action.get("fulfilled_count") or 0))
+        return min(1.25, fulfilled / recommended)
+
     response_started_at = None
     mitigation_progress = 0.0
-    accepted_ratio = len(on_scene_actions) / actionable_count
+    approved_optimization = incident_state.get("approved_optimization") or {}
+    optimization_controls = approved_optimization.get("controls") or {}
+    optimization_active = bool(optimization_controls)
+    control_progress = 0.0
+    if optimization_active:
+        approved_sim_time = parse_ts(approved_optimization["approved_sim_time"])
+        control_progress = min(1.0, max(0.0, (at - approved_sim_time).total_seconds() / 300))
+    action_effects = {
+        action["action_id"]: round(action_effectiveness(action), 3)
+        for action in on_scene_actions
+    }
+    accepted_ratio = min(1.0, sum(action_effects.values()) / actionable_count)
     if on_scene_actions:
         response_started_at = min(on_scene_times)
         response_elapsed = max(0.0, (at - response_started_at).total_seconds() / 60)
@@ -143,7 +168,8 @@ def project_incident(
             event.get("severity"), 18
         )
         time_progress = min(1.0, response_elapsed / clearance_minutes)
-        mitigation_progress = min(1.0, time_progress * (0.4 + 0.6 * accepted_ratio))
+        police_boost = min(.15, .03 * int(optimization_controls.get("police_units") or 0))
+        mitigation_progress = min(1.0, time_progress * (0.4 + 0.6 * accepted_ratio + police_boost))
     response_phase = (
         "CLEARED" if mitigation_progress >= 0.999
         else "CLEARANCE_ACTIVE" if on_scene_actions
@@ -187,6 +213,17 @@ def project_incident(
     projected[road_id] = _blend_toward_baseline(
         baseline[road_id], raw_affected, mitigation_progress, response_label
     )
+    if optimization_active and control_progress > 0:
+        green_pct = int(optimization_controls.get("green_extension_pct") or 0)
+        diversion_share = float(optimization_controls.get("diversion_share") or 0)
+        control_relief = (.0032 * green_pct + .12 * diversion_share) * control_progress
+        controlled = projected[road_id]
+        projected[road_id] = replace(
+            controlled,
+            saturation_score=round(max(.15, controlled.saturation_score - control_relief), 3),
+            avg_speed=round(min(65, controlled.avg_speed * (1 + control_relief * .9)), 1),
+            lane_status=f"Approved optimized control {round(control_progress * 100)}% · incident projection",
+        )
     unmitigated_metrics[road_id] = {
         "avg_speed": raw_affected.avg_speed,
         "vehicle_count": raw_affected.vehicle_count,
@@ -202,10 +239,12 @@ def project_incident(
         )
         load_targets: list[tuple[str, float]] = []
         primary = initial.get("primary_route")
+        approved_diversion_share = float(optimization_controls.get("diversion_share") or 0)
         if primary:
-            load_targets.append((primary["segment_id"], 1.0))
+            load_targets.append((primary["segment_id"], approved_diversion_share if optimization_active else 1.0))
         load_targets.extend(
-            (row["segment_id"], 0.42) for row in initial.get("secondary_routes", [])
+            (row["segment_id"], (1 - approved_diversion_share) * 0.42 if optimization_active else 0.42)
+            for row in initial.get("secondary_routes", [])
         )
         for target_id, share in load_targets:
             record = projected.get(target_id)
@@ -263,15 +302,20 @@ def project_incident(
         "response_started_at": response_started_at.strftime("%Y-%m-%d %H:%M") if response_started_at else None,
         "accepted_action_ids": [action["action_id"] for action in accepted_actions_all],
         "on_scene_action_ids": [action["action_id"] for action in on_scene_actions],
+        "action_effectiveness": action_effects,
         "accepted_action_ratio": round(accepted_ratio, 3),
         "mitigation_progress": round(mitigation_progress, 3),
+        "optimization_control_progress": round(control_progress, 3),
+        "approved_optimization": approved_optimization or None,
         "changed_segment_ids": sorted(changed),
         "unmitigated_metrics": unmitigated_metrics,
         "dynamic_routing": dynamic_routing,
         "formula": {
             "intensity": "status_factor × event_type_factor × min(1, 0.55 + elapsed_minutes/30×0.45)",
             "affected": "baseline + severity_profile × intensity",
-            "diversion": "primary 100%, secondary 42% of severity diversion load",
+            "diversion": "未核准方案時 primary 100% / secondary 42%；核准後依 diversion_share 分配至最佳替代路段，其餘分散至次要路段",
+            "decision_effect": "sum(actual_fulfilled / agent_recommended, capped 1.25 per action) / actionable_actions",
+            "approved_control_effect": "5 分鐘線性生效；focus relief=(0.0032×green_extension_pct + 0.12×diversion_share)×progress",
         },
         "production_state_modified": False,
     }

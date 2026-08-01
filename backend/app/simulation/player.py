@@ -5,13 +5,130 @@
 """
 from __future__ import annotations
 
+from dataclasses import replace
+from datetime import timedelta
 import hashlib
 import json
 
-from ..data_loader import all_timestamps, format_ts
+from ..data_loader import all_timestamps, format_ts, parse_ts
 from ..engines import ete_calculator, rule_engine
 from ..coordinator.coordinator import DataBundle
 from .incident_effects import project_incident
+
+
+def project_crowd_incident(at, baseline_crowd, incident_state, assumption):
+    """Project a crowd incident and its approved response onto one station snapshot.
+
+    Event values come from the validated custom-incident assumption. Improvements start
+    only after approved resources arrive, then blend the event state back toward the
+    organizer-data baseline. This is deterministic and does not modify source records.
+    """
+    if not assumption or not incident_state:
+        return baseline_crowd, None
+    starts_at = parse_ts(incident_state.get("as_of"))
+    if at < starts_at or incident_state.get("operational_status") == "RESOLVED":
+        return baseline_crowd, None
+    station_id = assumption.get("station_id")
+    if station_id not in baseline_crowd:
+        return baseline_crowd, None
+
+    baseline_record = baseline_crowd[station_id]
+    event_record = replace(baseline_record, **assumption.get("applied", {}))
+    dispatch_actions = (incident_state.get("dispatch") or {}).get("actions", [])
+    accepted_actions = [
+        action for action in dispatch_actions
+        if action.get("status") in {"accepted", "adjusted"}
+        and int(action.get("fulfilled_count") or 0) > 0
+        and action.get("accepted_sim_time")
+        and parse_ts(action["accepted_sim_time"]) <= at
+    ]
+    on_scene: list[tuple[dict, object]] = []
+    for action in accepted_actions:
+        assignments = action.get("assignments") or []
+        eta = min((int(row.get("eta_minutes") or 0) for row in assignments), default=0)
+        arrived_at = parse_ts(action["accepted_sim_time"]) + timedelta(minutes=eta)
+        if arrived_at <= at:
+            on_scene.append((action, arrived_at))
+
+    actionable_count = max(1, len([
+        action for action in dispatch_actions if action.get("status") != "rejected"
+    ]))
+
+    def effectiveness(action: dict) -> float:
+        recommended = max(
+            1,
+            int(action.get("agent_recommended_count") or action.get("requested_count") or 1),
+        )
+        return min(1.25, max(0, int(action.get("fulfilled_count") or 0)) / recommended)
+
+    action_effects = {
+        action["action_id"]: round(effectiveness(action), 3)
+        for action, _ in on_scene
+    }
+    response_ratio = min(1.0, sum(action_effects.values()) / actionable_count)
+    mitigation = 0.0
+    response_started_at = None
+    if on_scene:
+        response_started_at = min(arrived_at for _, arrived_at in on_scene)
+        elapsed = max(0.0, (at - response_started_at).total_seconds() / 60)
+        clearance_minutes = {
+            "Critical": 30, "High": 20, "Medium": 16, "Low": 12,
+        }.get((incident_state.get("event") or {}).get("severity"), 16)
+        time_progress = min(1.0, elapsed / clearance_minutes)
+        mitigation = min(1.0, time_progress * (0.35 + 0.65 * response_ratio))
+
+    def blend(event_value: float, baseline_value: float) -> float:
+        return event_value + (baseline_value - event_value) * mitigation
+
+    projected_record = replace(
+        event_record,
+        user_count=max(0, round(blend(event_record.user_count, baseline_record.user_count))),
+        stay_time_avg=max(0.0, round(blend(event_record.stay_time_avg, baseline_record.stay_time_avg), 1)),
+        growth_rate=round(blend(event_record.growth_rate, baseline_record.growth_rate), 3),
+        roaming_user_pct=max(0.0, round(blend(event_record.roaming_user_pct, baseline_record.roaming_user_pct), 1)),
+    )
+    projected = dict(baseline_crowd)
+    projected[station_id] = projected_record
+    response_phase = (
+        "CLEARED" if mitigation >= 0.999
+        else "CLEARANCE_ACTIVE" if on_scene
+        else "DISPATCHING" if accepted_actions
+        else "OBSTACLE_ACTIVE"
+    )
+    context = {
+        "active": True,
+        "model": "deterministic-crowd-response-v1",
+        "incident_id": incident_state.get("incident_id"),
+        "starts_at": format_ts(starts_at),
+        "affected_station_id": station_id,
+        "changed_station_ids": [station_id],
+        "response_phase": response_phase,
+        "response_started_at": format_ts(response_started_at) if response_started_at else None,
+        "accepted_action_ids": [action["action_id"] for action in accepted_actions],
+        "on_scene_action_ids": [action["action_id"] for action, _ in on_scene],
+        "action_effectiveness": action_effects,
+        "accepted_action_ratio": round(response_ratio, 3),
+        "mitigation_progress": round(mitigation, 3),
+        "crowd_baseline": {
+            "user_count": baseline_record.user_count,
+            "growth_rate": baseline_record.growth_rate,
+            "roaming_user_pct": baseline_record.roaming_user_pct,
+            "stay_time_avg": baseline_record.stay_time_avg,
+        },
+        "crowd_unmitigated": {
+            "user_count": event_record.user_count,
+            "growth_rate": event_record.growth_rate,
+            "roaming_user_pct": event_record.roaming_user_pct,
+            "stay_time_avg": event_record.stay_time_avg,
+        },
+        "formula": {
+            "decision_effect": "sum(actual_fulfilled / agent_recommended, capped 1.25) / actionable_actions",
+            "crowd_recovery": "event_value + (organizer_baseline - event_value) × mitigation_progress",
+        },
+        "deterministic": True,
+        "production_state_modified": False,
+    }
+    return projected, context
 
 
 def _scenario_metrics(record) -> dict:
@@ -174,6 +291,15 @@ class SimulationPlayer:
             network=self.bundle.network,
         )
         crowd_snap = self.bundle.crowd_at(at)
+        crowd_assumption = next((
+            row for row in (self.active_incident_state or {}).get("assumptions", [])
+            if row.get("field") == "crowd_snapshot"
+        ), None)
+        crowd_snap, crowd_context = project_crowd_incident(
+            at, crowd_snap, self.active_incident_state, crowd_assumption
+        )
+        if crowd_context:
+            simulation_context = {**simulation_context, **crowd_context}
         traffic_eval = rule_engine.evaluate_traffic(traffic_snap)
         crowd_triggers = rule_engine.evaluate_crowd(crowd_snap, self.bundle.crowd, at)
         scenario_comparison = build_scenario_comparison(

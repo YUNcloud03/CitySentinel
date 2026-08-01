@@ -29,6 +29,7 @@ export default function App() {
   const [resourceKey, setResourceKey] = useState(0);
   const [simulationGeneration, setSimulationGeneration] = useState(0);
   const [validationSla, setValidationSla] = useState<ValidationSlaMeasurement | null>(null);
+  const [acknowledgedIncidents, setAcknowledgedIncidents] = useState<Set<string>>(() => new Set());
   const playingRef = useRef(false);
   const validationStartedRef = useRef<number | null>(null);
 
@@ -42,6 +43,24 @@ export default function App() {
   useEffect(() => {
     playingRef.current = view?.playing ?? false;
   }, [view?.playing]);
+
+  useEffect(() => {
+    if (page !== "command") return;
+    const preventViewportWheelZoom = (event: WheelEvent) => {
+      if (event.ctrlKey || event.metaKey) event.preventDefault();
+    };
+    const preventViewportKeyZoom = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && ["+", "-", "=", "0"].includes(event.key)) {
+        event.preventDefault();
+      }
+    };
+    window.addEventListener("wheel", preventViewportWheelZoom, { passive: false, capture: true });
+    window.addEventListener("keydown", preventViewportKeyZoom, { capture: true });
+    return () => {
+      window.removeEventListener("wheel", preventViewportWheelZoom, { capture: true });
+      window.removeEventListener("keydown", preventViewportKeyZoom, { capture: true });
+    };
+  }, [page]);
 
   useEffect(() => {
     const timer = setInterval(async () => {
@@ -71,6 +90,7 @@ export default function App() {
       setView(result.view);
       setIncident(null);
       setValidationSla(null);
+      setAcknowledgedIncidents(new Set());
       validationStartedRef.current = null;
       setResourceKey((k) => k + 1);
       setSimulationGeneration((k) => k + 1);
@@ -88,6 +108,11 @@ export default function App() {
     setValidationSla(null);
     try {
       const state = await api.inject(id);
+      setAcknowledgedIncidents((current) => {
+        const next = new Set(current);
+        next.delete(state.incident_id);
+        return next;
+      });
       setIncident(state);
       setResourceKey((k) => k + 1); // 資源已被調度，刷新庫存
       // 事件時間點同步跳轉，讓地圖顏色與事件一致
@@ -120,9 +145,23 @@ export default function App() {
 
   const refreshIncident = useCallback(async () => {
     if (!incident) return;
-    setIncident(await api.incidentState(incident.incident_id));
+    const next = await api.incidentState(incident.incident_id);
+    setIncident(next);
+    if (next.operational_status === "RESOLVED") {
+      setAcknowledgedIncidents((current) => new Set(current).add(next.incident_id));
+    }
     setResourceKey((k) => k + 1);
   }, [incident]);
+
+  const acknowledgeIncident = useCallback((incidentId: string) => {
+    setAcknowledgedIncidents((current) => new Set(current).add(incidentId));
+  }, []);
+
+  const activateDecisionSimulation = useCallback(async () => {
+    const nextView = await api.simStart(2);
+    playingRef.current = true;
+    setView(nextView);
+  }, []);
 
   const seekTo = useCallback(async (ts: string) => {
     setView(await api.simSeek(ts));
@@ -166,10 +205,18 @@ export default function App() {
           resourceKey={resourceKey}
           simulationGeneration={simulationGeneration}
           validationSla={validationSla}
+          incidentAcknowledged={Boolean(incident && acknowledgedIncidents.has(incident.incident_id))}
+          onAcknowledgeIncident={acknowledgeIncident}
+          onDecisionAccepted={activateDecisionSimulation}
           onScenarioRendered={markScenarioRendered}
           onInject={inject}
           onInjectedCustom={(state) => {
             setIncident(state);
+            setAcknowledgedIncidents((current) => {
+              const next = new Set(current);
+              next.delete(state.incident_id);
+              return next;
+            });
             setValidationSla(null);
             validationStartedRef.current = null;
             setResourceKey((k) => k + 1);

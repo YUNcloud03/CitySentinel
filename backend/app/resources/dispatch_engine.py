@@ -50,11 +50,19 @@ def build_requirements(
                 "主疏散路徑啟動長綠燈配時 +25%",
             ))
 
-    # SOP 3：捷運與接駁分流（僅當事件本身就是該基地台）
+    # 人潮分流（僅當事件本身就是該基地台／場館）
     if 3 in crowd_rule_ids_for_incident:
-        reqs.append(_req(3, reg.MRT_LIAISON, 1, "協調北捷過站不停", "BL17 人流達門檻，需北捷行控協調"))
-        reqs.append(_req(3, reg.SHUTTLE, 2, "調度接駁專車", "公車處調度接駁專車疏運"))
-        reqs.append(_req(3, reg.POLICE, 2, "出口引導與步行分流至 BL18", "引導群眾步行至捷運市政府站"))
+        if seg_id == "BS_MRT_BL17":
+            reqs.append(_req(3, reg.MRT_LIAISON, 1, "協調北捷過站不停", "BL17 人流達門檻，需北捷行控協調"))
+            reqs.append(_req(3, reg.SHUTTLE, 2, "調度接駁專車", "公車處調度接駁專車疏運"))
+            reqs.append(_req(3, reg.POLICE, 2, "出口引導與步行分流至 BL18", "引導群眾步行至捷運市政府站"))
+        elif seg_id.startswith("BS_MRT_"):
+            reqs.append(_req(3, reg.MRT_LIAISON, 1, "協調站內入口管制與列車疏運", "人流增幅達門檻，需北捷行控協調"))
+            reqs.append(_req(3, reg.SHUTTLE, 2, "調度替代運輸", "分散捷運站候車人流"))
+            reqs.append(_req(3, reg.POLICE, 2, "出入口單向分流", "維持出入口與緊急救援通道"))
+        else:
+            reqs.append(_req(3, reg.POLICE, 2, "場館出入口單向分流", "維持出入口與緊急救援通道"))
+            reqs.append(_req(3, reg.SHUTTLE, 2, "調度接駁與替代運輸", "分散場館周邊候車人流"))
 
     # SOP 5：號誌故障（每受影響路口配置 2 名警力）
     if 5 in incident_rule_ids:

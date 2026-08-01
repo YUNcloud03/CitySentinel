@@ -245,11 +245,16 @@ python -m pytest tests -q
 3. 差異紀錄於 `data/DATA_NOTES.md`
 
 ```
-採用版 SHA256：
+現行採用版 SHA256（2026-08-02 主辦方更新版）：
+741D253538AAF2BB25C60DEC9D4A8E8DEFECC27112FA09C7A9F1512ADB286B18
+
+前一版 SHA256（僅供追溯）：
 05FE3CAF3834819E5C12018953502B582ECE6178639635FA600DE8D935054758
 ```
 
-> 核心 Demo 事件 `TPE_2026_ACC_001`（RD_TPE_002 光復南路）的 `intersections` 於兩版一致，主場景判定不受此差異影響。
+> 2026-08-02 換版差異僅為 `RD_TPE_001`／`RD_TPE_011`／`RD_TPE_013` 三條路段的 `intersections` 排列順序，路段數與其餘欄位皆未變動。換版後已對全部 15 個路段與 `live_incidents.json` 的 3 筆事件重跑路線規劃，事故路口定位、主要路線、次要路線三項輸出 **15/15 與 3/3 完全一致**，決策結果零變動；比對記錄見 `data/DATA_NOTES.md`。
+>
+> 核心 Demo 事件 `TPE_2026_ACC_001`（RD_TPE_002 光復南路）的 `intersections` 本就兩版相同，主場景判定不受影響。
 
 ---
 

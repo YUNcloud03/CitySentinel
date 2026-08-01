@@ -33,7 +33,7 @@ const RES_TYPE_LABEL: Record<string, string> = {
 const RULE_NAMES: Record<number, string> = {
   1: "壅塞分級",
   2: "車禍路障",
-  3: "捷運分流",
+  3: "人潮分流",
   4: "大巨蛋散場",
   5: "號誌故障",
   6: "多語通報",
@@ -158,7 +158,30 @@ export function CrowdPanel({ crowd }: { crowd: Record<string, CrowdRow> }) {
 
 // ---- 預警清單 ----
 
-export function AlertFeed({ alerts }: { alerts: Alert[] }) {
+function alertEntityName(alert: Alert, view?: SimView | null) {
+  return view?.traffic?.[alert.entity_id]?.road_name
+    ?? view?.crowd?.[alert.entity_id]?.location_name
+    ?? alert.entity_id;
+}
+
+function alertEvidenceText(evidence: Record<string, unknown>) {
+  const labels: Record<string, string> = {
+    saturation_score: "飽和度", congestion_level: "分級", user_count: "人數",
+    growth_rate: "增幅", roaming_user_pct: "漫遊率", historical_peak: "歷史峰值",
+  };
+  return Object.entries(evidence)
+    .filter(([key, value]) => labels[key] && ["string", "number"].includes(typeof value))
+    .slice(0, 3)
+    .map(([key, value]) => `${labels[key]} ${typeof value === "number" && key === "growth_rate" ? `${Math.round(value * 100)}%` : value}`)
+    .join("｜");
+}
+
+export function AlertFeed({ alerts, view, onLocate, onEvidence }: {
+  alerts: Alert[];
+  view?: SimView | null;
+  onLocate?: (alert: Alert) => void;
+  onEvidence?: (alert: Alert) => void;
+}) {
   // 未讀狀態：新預警帶低頻呼吸光，hover 即標記已讀（不閃爍干擾閱讀）
   const readRef = useRef<Set<string>>(new Set());
   const [, force] = useState(0);
@@ -180,8 +203,13 @@ export function AlertFeed({ alerts }: { alerts: Alert[] }) {
             }}
           >
             <RuleBadge id={a.rule_id} />
-            <span className="alert-entity">{a.entity_id}</span>
+            <span className="alert-entity">{alertEntityName(a, view)}</span>
+            <div className="alert-evidence-summary">{alertEvidenceText(a.evidence) || "已達規則門檻"}</div>
             <div className="alert-actions">{a.actions.join("；")}</div>
+            {(onLocate || onEvidence) && <div className="alert-command-actions">
+              {onLocate && <button type="button" onClick={() => onLocate(a)}>定位／推演</button>}
+              {onEvidence && <button type="button" onClick={() => onEvidence(a)}>查看決策依據</button>}
+            </div>}
           </div>
         );
       })}
@@ -274,9 +302,11 @@ export function IncidentPanel({
 function DispatchSection({
   incident,
   onRefresh,
+  onDecisionAccepted,
 }: {
   incident: IncidentState;
   onRefresh: () => void;
+  onDecisionAccepted?: () => Promise<void> | void;
 }) {
   const dispatch = incident.dispatch;
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -297,6 +327,7 @@ function DispatchSection({
         operator: "traffic_commander_01",
       });
       onRefresh();
+      if (["accept", "adjust", "preempt"].includes(op)) await onDecisionAccepted?.();
     } finally {
       setBusyId(null);
     }
@@ -374,7 +405,7 @@ function DispatchSection({
           )}
           {(a.status === "accepted" || a.status === "adjusted") && (
             <div className="dispatch-execution-note">
-              ✓ 決策已核准，疏通處理將隨模擬時間逐步生效
+              ✓ 決策已核准，系統已自動播放；資源抵達前維持障礙，抵達後才逐步疏通
               {a.accepted_sim_time ? `｜啟動 ${a.accepted_sim_time}` : ""}
             </div>
           )}
@@ -428,7 +459,29 @@ const STAGES: { name: string; steps: string[]; hint: (t: any[]) => string }[] = 
     hint: (t) => { const p = t.find((x) => x.step === "PUBLISHED"); return p?.detail?.notification_status ? "通報待核准" : "內容生成"; } },
 ];
 
-export function DecisionStages({ incident }: { incident: IncidentState | null }) {
+const TRACE_DETAIL_LABELS: Record<string, string> = {
+  score: "可信度", level: "等級", actions: "建議動作數", primary: "主疏導路段",
+  has_shortfall: "資源缺口", notification_status: "通知狀態", ete_minutes: "預估處理時間",
+  caused_by_incident: "事件觸發規則", context_rules: "環境規則", rule_ids: "引用規則",
+  execution_policy: "執行政策", simulation_time: "模擬時間", op: "人工操作",
+  override_by: "操作人員", override_reason: "調整原因", adjusted_to: "調整數量",
+};
+
+function traceDetailRows(detail: Record<string, any>) {
+  return Object.entries(detail)
+    .filter(([key, value]) => TRACE_DETAIL_LABELS[key] && value != null)
+    .map(([key, value]) => ({
+      label: TRACE_DETAIL_LABELS[key],
+      value: typeof value === "object" ? JSON.stringify(value) : String(value),
+    }));
+}
+
+export function DecisionStages({ incident, onGoDecision, onGoEvidence, onGoNotify }: {
+  incident: IncidentState | null;
+  onGoDecision?: () => void;
+  onGoEvidence?: () => void;
+  onGoNotify?: () => void;
+}) {
   const [open, setOpen] = useState<number | null>(null);
   useEffect(() => setOpen(null), [incident?.incident_id]);
   if (!incident) return <p className="dim">注入事件後顯示決策依據與執行進度。</p>;
@@ -436,9 +489,19 @@ export function DecisionStages({ incident }: { incident: IncidentState | null })
   const trace = incident.decision_trace;
   const done = new Set(trace.map((t) => t.step));
   const failed = incident.workflow_status === "failed";
+  const pendingActions = incident.dispatch?.actions.filter((action: any) => ["proposed", "shortfall"].includes(action.status)).length ?? 0;
+  const nextAction = failed
+    ? { label: "流程失敗，查看證據", action: onGoEvidence }
+    : pendingActions > 0
+      ? { label: `${pendingActions} 項處置待核准`, action: onGoDecision }
+      : { label: "檢查並核准通知", action: onGoNotify };
 
   return (
     <div className="stages">
+      <div className={`decision-next-action ${failed ? "failed" : ""}`}>
+        <span>指揮官下一步</span><b>{nextAction.label}</b>
+        {nextAction.action && <button type="button" onClick={nextAction.action}>立即處理</button>}
+      </div>
       <div className="stage-rail">
         {STAGES.map((st, i) => {
           const hit = st.steps.some((s) => done.has(s));
@@ -457,10 +520,17 @@ export function DecisionStages({ incident }: { incident: IncidentState | null })
           <div className="td-step">{STAGES[open].name}</div>
           {trace.filter((t) => STAGES[open].steps.includes(t.step)).map((t, i) => (
             <div key={i} className="stage-step">
-              <b>{t.step}</b> <span className="dim">{t.at.slice(11)}</span>
-              <div className="mono small">{JSON.stringify(t.detail, null, 1)}</div>
+              <b>{t.step}</b> <span className="dim">{t.at.slice(11, 19)}</span>
+              {traceDetailRows(t.detail).length > 0
+                ? <dl>{traceDetailRows(t.detail).map((row) => <div key={row.label}><dt>{row.label}</dt><dd>{row.value}</dd></div>)}</dl>
+                : <p className="dim small">此步驟已完成，沒有額外的指揮官輸入。</p>}
             </div>
           ))}
+          <div className="stage-detail-actions">
+            {open <= 1 && onGoEvidence && <button type="button" onClick={onGoEvidence}>查看完整證據</button>}
+            {(open === 2 || open === 3) && onGoDecision && <button type="button" className="primary" onClick={onGoDecision}>前往核准／調整</button>}
+            {open === 4 && onGoNotify && <button type="button" className="primary" onClick={onGoNotify}>前往通知核准</button>}
+          </div>
           {failed && <div className="warn">流程未完成，以上為已完成階段。</div>}
         </div>
       )}
@@ -515,7 +585,11 @@ export function EvidenceTab({ incident }: { incident: IncidentState | null }) {
   );
 }
 
-export function IncidentDetail({ incident, onRefresh }: { incident: IncidentState; onRefresh: () => void }) {
+export function IncidentDetail({ incident, onRefresh, onDecisionAccepted }: {
+  incident: IncidentState;
+  onRefresh: () => void;
+  onDecisionAccepted?: () => Promise<void> | void;
+}) {
   const routing = incident.routing_result;
   const ete = incident.ete_result;
   const noti = incident.notifications;
@@ -601,7 +675,7 @@ export function IncidentDetail({ incident, onRefresh }: { incident: IncidentStat
         </>
       )}
 
-      <DispatchSection incident={incident} onRefresh={onRefresh} />
+      <DispatchSection incident={incident} onRefresh={onRefresh} onDecisionAccepted={onDecisionAccepted} />
 
       <AISummarySection incident={incident} />
 
@@ -782,18 +856,29 @@ const FALLBACK_SEGMENT_OPTIONS = [
   ["RD_TPE_010", "市府路"], ["RD_TPE_011", "松壽路"], ["RD_TPE_012", "敦化南路二段"],
   ["RD_TPE_013", "信義路五段"], ["RD_TPE_014", "松智路"], ["RD_TPE_015", "復興南路一段"],
 ];
+const FALLBACK_STATION_OPTIONS = [
+  ["BS_MRT_BL17", "捷運國父紀念館站"], ["BS_MRT_BL18", "捷運市政府站"],
+  ["BS_TPE_DOME", "臺北大巨蛋"], ["BS_TPE_101", "台北 101 廣場"],
+  ["BS_XY_VIESHOW", "信義威秀商圈"], ["BS_XY_ATT", "ATT 4 FUN 周邊"],
+] as [string, string][];
 
 const CUSTOM_EVENT_TYPES = [
   ["Road_Collapse", "路面塌陷", 1],
   ["Traffic_Accident", "交通事故", .9],
   ["Power_Failure", "號誌故障", .7],
   ["Flooding", "道路積水", .82],
+  ["Crowd_Surge_Injury", "人潮擁擠／暴增", .55],
 ] as const;
 const CUSTOM_EVENT_STATUSES = [
   ["Closed", "完全封閉", "一般車輛不可通行，路線規劃排除事故路段", 1],
   ["Blocked", "嚴重阻塞", "道路接近無法通行，僅保留極低通行能力", .88],
   ["Restricted", "部分管制", "依封閉車道數降低道路容量", .64],
   ["Caution", "警戒通行", "仍可通行，但需降速並持續監測", .42],
+] as const;
+const CUSTOM_CROWD_STATUSES = [
+  ["Crowded", "人潮擁擠", "人數高但仍可控制，啟動站點監測與分流評估"],
+  ["Surging", "人潮快速增加", "依 5 分鐘增幅判斷是否達到預警門檻"],
+  ["Dispersing", "大型活動散場", "人潮由場館向車站及周邊道路移動"],
 ] as const;
 const SEVERITY_PREVIEW = {
   Critical: { saturation: .38, speedLoss: .78, label: "最高優先" },
@@ -806,7 +891,7 @@ export function CustomEventForm({ onInjected, simTime }: {
   onInjected: (state: IncidentState) => void;
   simTime?: string | null;
 }) {
-  const [form, setForm] = useState({
+  const initialForm = (timestamp: string) => ({
     type: "Road_Collapse",
     affected_segment: "RD_TPE_003",
     status: "Closed",
@@ -820,20 +905,30 @@ export function CustomEventForm({ onInjected, simTime }: {
     human_confirmed: true,
     description: "",
     roaming_override_pct: "",  // ""＝依實際資料
+    crowd_user_count: 30_000,
+    crowd_growth_pct: 50,
+    crowd_roaming_pct: 30,
+    crowd_stay_time_avg: 45,
   });
+  const [form, setForm] = useState(() => initialForm(simTime ?? "2026-05-20 22:00"));
   const [segments, setSegments] = useState(FALLBACK_SEGMENT_OPTIONS);
+  const [stations, setStations] = useState(FALLBACK_STATION_OPTIONS);
   const [timestamps, setTimestamps] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
     let active = true;
-    Promise.all([api.roadNetwork(), api.timeline()]).then(([roads, timeline]) => {
+    Promise.all([api.roadNetwork(), api.timeline(), api.crowdStations()]).then(([roads, timeline, crowdStations]) => {
       if (!active) return;
       const options = roads
         .filter((road: any) => String(road.segment_id).startsWith("RD_"))
         .map((road: any) => [String(road.segment_id), String(road.name)] as [string, string]);
       if (options.length) setSegments(options);
+      const stationOptions = crowdStations.map((station) => (
+        [station.station_id, station.name] as [string, string]
+      ));
+      if (stationOptions.length) setStations(stationOptions);
       setTimestamps(timeline.timestamps);
     }).catch(() => {});
     return () => { active = false; };
@@ -856,7 +951,21 @@ export function CustomEventForm({ onInjected, simTime }: {
     });
   };
 
-  const statusOption = CUSTOM_EVENT_STATUSES.find(([value]) => value === form.status)!;
+  const isCrowd = form.type === "Crowd_Surge_Injury";
+  const changeType = (type: string) => {
+    setForm((current) => type === "Crowd_Surge_Injury"
+      ? { ...current, type, affected_segment: "BS_MRT_BL17", status: "Surging", description: "" }
+      : { ...current, type, affected_segment: "RD_TPE_003", status: "Blocked", description: "" });
+  };
+  const resetForm = () => {
+    setForm(initialForm(simTime ?? form.timestamp));
+    setError("");
+  };
+
+  const statusOption = CUSTOM_EVENT_STATUSES.find(([value]) => value === form.status)
+    ?? CUSTOM_EVENT_STATUSES[1];
+  const crowdStatusOption = CUSTOM_CROWD_STATUSES.find(([value]) => value === form.status)
+    ?? CUSTOM_CROWD_STATUSES[0];
   const typeOption = CUSTOM_EVENT_TYPES.find(([value]) => value === form.type)!;
   const severity = SEVERITY_PREVIEW[form.severity as keyof typeof SEVERITY_PREVIEW];
   const initialIntensity = statusOption[3] * typeOption[2] * .55;
@@ -872,14 +981,21 @@ export function CustomEventForm({ onInjected, simTime }: {
     setBusy(true);
     setError("");
     try {
-      const segName = segments.find(([id]) => id === form.affected_segment)?.[1] ?? "";
+      const segName = (isCrowd ? stations : segments)
+        .find(([id]) => id === form.affected_segment)?.[1] ?? "";
       const state = await api.customIncident({
         ...form,
         // 空字串＝不覆寫，須送 null 而非 ""（後端欄位為 float | None）
         roaming_override_pct: form.roaming_override_pct === ""
           ? null : Number(form.roaming_override_pct),
+        crowd_user_count_override: isCrowd ? Number(form.crowd_user_count) : null,
+        crowd_growth_rate_override: isCrowd ? Number(form.crowd_growth_pct) / 100 : null,
+        crowd_roaming_user_pct_override: isCrowd ? Number(form.crowd_roaming_pct) : null,
+        crowd_stay_time_avg_override: isCrowd ? Number(form.crowd_stay_time_avg) : null,
         location: segName,
-        description: form.description.trim() || `自訂模擬事件：${segName} ${typeOption[1]}，${statusOption[1]}`,
+        description: form.description.trim() || (isCrowd
+          ? `自訂人潮事件：${segName} ${crowdStatusOption[1]}，5 分鐘增幅 ${form.crowd_growth_pct}%`
+          : `自訂模擬事件：${segName} ${typeOption[1]}，${statusOption[1]}`),
       });
       onInjected(state);
     } catch (e: any) {
@@ -894,21 +1010,22 @@ export function CustomEventForm({ onInjected, simTime }: {
       <summary><h3 style={{ display: "inline" }}>自訂事件模擬器</h3></summary>
       <p className="custom-event-intro">建立可重播的模擬事件；所有選項在注入前先顯示計算影響，不會直接修改真實設備。</p>
       <div className="form-grid">
-        <label>路段
+        <label>{isCrowd ? "人潮站點" : "路段"}
           <select value={form.affected_segment} onChange={(e) => set("affected_segment", e.target.value)}>
-            {segments.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+            {(isCrowd ? stations : segments).map(([id, name]) => <option key={id} value={id}>{name}</option>)}
           </select>
         </label>
         <label>類型
-          <select value={form.type} onChange={(e) => set("type", e.target.value)}>
+          <select value={form.type} onChange={(e) => changeType(e.target.value)}>
             {CUSTOM_EVENT_TYPES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
         </label>
         <label>狀態
           <select value={form.status} onChange={(e) => set("status", e.target.value)}>
-            {CUSTOM_EVENT_STATUSES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            {(isCrowd ? CUSTOM_CROWD_STATUSES : CUSTOM_EVENT_STATUSES)
+              .map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
-          <small>{statusOption[2]}</small>
+          <small>{isCrowd ? crowdStatusOption[2] : statusOption[2]}</small>
         </label>
         <label>嚴重度
           <select value={form.severity} onChange={(e) => set("severity", e.target.value)}>
@@ -916,7 +1033,7 @@ export function CustomEventForm({ onInjected, simTime }: {
             <option value="Medium">中｜一般應變</option><option value="Low">低｜持續監測</option>
           </select>
         </label>
-        <label>影響方向
+        {!isCrowd && <><label>影響方向
           <select value={form.affected_direction} onChange={(e) => set("affected_direction", e.target.value)}>
             <option value="both">雙向</option><option value="northbound">北向</option>
             <option value="southbound">南向</option><option value="eastbound">東向</option>
@@ -931,7 +1048,7 @@ export function CustomEventForm({ onInjected, simTime }: {
           <input type="number" min={0} max={form.lanes_total} value={form.lanes_closed}
             disabled={form.status === "Closed"}
             onChange={(e) => set("lanes_closed", Number(e.target.value))} />
-        </label>
+        </label></>}
         <label>時間
           <select value={form.timestamp} onChange={(e) => set("timestamp", e.target.value)}>
             {(timestamps.length ? timestamps : [form.timestamp]).map((timestamp) => (
@@ -939,7 +1056,7 @@ export function CustomEventForm({ onInjected, simTime }: {
             ))}
           </select>
         </label>
-        <label>漫遊率
+        {!isCrowd && <label>漫遊率
           <select value={form.roaming_override_pct}
             onChange={(e) => set("roaming_override_pct", e.target.value)}>
             <option value="">依實際資料</option>
@@ -947,7 +1064,27 @@ export function CustomEventForm({ onInjected, simTime }: {
               <option key={p} value={p}>{p}%（假設值）</option>
             ))}
           </select>
-        </label>
+        </label>}
+        {isCrowd && <>
+          <label>站點人數
+            <input type="number" min={0} max={200000} step={500}
+              value={form.crowd_user_count} onChange={(e) => set("crowd_user_count", Number(e.target.value))} />
+          </label>
+          <label>5 分鐘人流增幅
+            <input type="number" min={-100} max={500} step={5}
+              value={form.crowd_growth_pct} onChange={(e) => set("crowd_growth_pct", Number(e.target.value))} />
+            <small>50 代表五分鐘增加 50%</small>
+          </label>
+          <label>漫遊使用者比例
+            <input type="number" min={0} max={100} step={1}
+              value={form.crowd_roaming_pct} onChange={(e) => set("crowd_roaming_pct", Number(e.target.value))} />
+          </label>
+          <label>平均停留時間
+            <input type="number" min={0} max={600} step={5}
+              value={form.crowd_stay_time_avg} onChange={(e) => set("crowd_stay_time_avg", Number(e.target.value))} />
+            <small>分鐘</small>
+          </label>
+        </>}
         <label>重新評估間隔
           <select value={form.review_interval_minutes} onChange={(e) => set("review_interval_minutes", Number(e.target.value))}>
             {[5, 10, 15, 30, 60].map((minutes) => <option key={minutes} value={minutes}>{minutes} 分鐘</option>)}
@@ -967,19 +1104,32 @@ export function CustomEventForm({ onInjected, simTime }: {
           已由人員確認事件
         </label>
         <label className="custom-event-description">補充描述
-          <textarea rows={2} value={form.description} placeholder="例如：內側兩車道塌陷，現場已設置封鎖線"
+          <textarea rows={2} value={form.description}
+            placeholder={isCrowd ? "例如：活動散場後人潮持續湧入捷運入口" : "例如：內側兩車道塌陷，現場已設置封鎖線"}
             onChange={(e) => set("description", e.target.value)} />
         </label>
       </div>
       <div className="custom-impact-preview">
         <div><b>注入前影響預覽</b><span>固定規則｜可重播</span></div>
-        <ul>
+        {isCrowd ? <ul>
+          <li>站點人數：<strong>{Number(form.crowd_user_count).toLocaleString()} 人</strong></li>
+          <li>5 分鐘增幅：<strong>{form.crowd_growth_pct}%</strong></li>
+          <li>漫遊率：<strong>{form.crowd_roaming_pct}%</strong></li>
+          <li>規則判定：<strong>{form.affected_segment === "BS_MRT_BL17"
+            && (form.crowd_user_count > 25_000 || form.crowd_growth_pct > 30)
+            ? "將觸發捷運分流"
+            : form.crowd_growth_pct >= 50
+              ? "將觸發單站人潮分流"
+              : "持續監測（尚未達門檻）"}</strong></li>
+        </ul> : <ul>
           <li>初始道路容量：<strong>{capacityPct}%</strong></li>
           <li>初始速度影響：<strong>{form.status === "Closed" ? "一般通行歸零" : `約下降 ${previewSpeedLoss}%`}</strong></li>
           <li>初始飽和度：<strong>約增加 {previewSaturation}</strong></li>
           <li>應變層級：<strong>{severity.label}</strong></li>
-        </ul>
-        <small>依據：狀態係數 {statusOption[3]} × 類型係數 {typeOption[2]} × 初始時間係數 0.55；30 分鐘內逐步達完整影響。</small>
+        </ul>}
+        <small>{isCrowd
+          ? "人潮數值只覆寫本次模擬快照；BL17 依主辦方 SOP 3 判定，其他站點則依競賽需求範例的 5 分鐘增幅 ≥50% 啟動分流。"
+          : `依據：狀態係數 ${statusOption[3]} × 類型係數 ${typeOption[2]} × 初始時間係數 0.55；30 分鐘內逐步達完整影響。`}</small>
       </div>
       {form.roaming_override_pct !== "" && (
         <p className="dim small">
@@ -987,9 +1137,12 @@ export function CustomEventForm({ onInjected, simTime }: {
           SOP 6 門檻（≥ 30% 才須多語）。來源資料不會被修改，事件與通報會標示為假設值。
         </p>
       )}
-      <button className="primary" disabled={busy} onClick={submit}>
-        {busy ? "分析中…" : "注入模擬事件"}
-      </button>
+      <div className="custom-event-actions">
+        <button type="button" disabled={busy} onClick={resetForm}>重設參數</button>
+        <button className="primary" disabled={busy} onClick={submit}>
+          {busy ? "分析中…" : "注入模擬事件"}
+        </button>
+      </div>
       {error && <div className="warn">{error}</div>}
     </details>
   );

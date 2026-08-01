@@ -103,6 +103,19 @@ def test_ambient_crowd_rules_do_not_drive_dispatch():
     assert all(r["resource_type"] != reg.MRT_LIAISON for r in reqs)
 
 
+def test_venue_crowd_dispatch_does_not_invent_mrt_bypass():
+    reqs = de.build_requirements(
+        {"severity": "High", "affected_segment": "BS_XY_ATT"},
+        incident_rule_ids=set(),
+        crowd_rule_ids_for_incident={3},
+        routing_result=None,
+        network={},
+    )
+    assert all(r["resource_type"] != reg.MRT_LIAISON for r in reqs)
+    assert {r["resource_type"] for r in reqs} == {reg.POLICE, reg.SHUTTLE}
+    assert any("場館出入口" in r["purpose"] for r in reqs)
+
+
 def test_plan_dispatch_marks_shortfall_not_complete():
     r = ResourceRegistry([Resource("POL-01", reg.POLICE, "警力", 2, 2, "分局", 6)])
     reqs = [de._req(2, reg.POLICE, 4, "封鎖", "需 4 人")]

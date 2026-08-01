@@ -1,4 +1,7 @@
 """顧問對話 API 路由測試（LLM 層 mock，不打真 API）。"""
+import hashlib
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -40,9 +43,11 @@ def test_provenance(client):
     body = client.get("/api/provenance").json()
     files = {f["file"]: f for f in body["data_sources"]}
     assert files["road_network_geometry.json"]["records"] == 15
-    assert files["road_network_geometry.json"]["sha256"] == (
-        "05fe3caf3834819e5c12018953502b582ece6178639635fa600de8d935054758"
-    )
+    # provenance 必須回報它實際載入那份檔的雜湊，而不是寫死的字串。
+    # 現行採用版為 741D2535…（2026-08-02 主辦方更新版，見 data/DATA_NOTES.md）。
+    road_json = Path(__file__).resolve().parents[2] / "data" / "raw" / "road_network_geometry.json"
+    expected = hashlib.sha256(road_json.read_bytes()).hexdigest()
+    assert files["road_network_geometry.json"]["sha256"] == expected
     assert body["engine_constants"]["ETE"]["base_clearance"]["Critical"] == 60
 
 

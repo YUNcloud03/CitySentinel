@@ -100,10 +100,10 @@ export const greenCorridorSchema = z.object({
 });
 
 export const customIncidentInputSchema = z.object({
-  type: z.enum(["Road_Collapse", "Traffic_Accident", "Power_Failure", "Flooding"]),
+  type: z.enum(["Road_Collapse", "Traffic_Accident", "Power_Failure", "Flooding", "Crowd_Surge_Injury"]),
   location: z.string().min(2),
   affected_segment: z.string().regex(/^(RD|BS)_[A-Z0-9_]+$/),
-  status: z.enum(["Closed", "Blocked", "Restricted", "Caution"]),
+  status: z.enum(["Closed", "Blocked", "Restricted", "Caution", "Crowded", "Surging", "Dispersing"]),
   severity: z.enum(["Critical", "High", "Medium", "Low"]),
   description: z.string().min(4),
   timestamp: z.string().regex(/^2026-05-20 \d{2}:\d{2}$/),
@@ -114,13 +114,101 @@ export const customIncidentInputSchema = z.object({
   lanes_closed: z.number().int().min(0).max(8).optional(),
   review_interval_minutes: z.number().int().min(5).max(120).optional(),
   roaming_override_pct: z.number().min(0).max(100).nullable().optional(),
-}).passthrough();
+  crowd_user_count_override: z.number().int().min(0).max(200_000).nullable().optional(),
+  crowd_growth_rate_override: z.number().min(-1).max(5).nullable().optional(),
+  crowd_roaming_user_pct_override: z.number().min(0).max(100).nullable().optional(),
+  crowd_stay_time_avg_override: z.number().min(0).max(600).nullable().optional(),
+}).passthrough().superRefine((value, context) => {
+  const isCrowd = value.type === "Crowd_Surge_Injury";
+  if (isCrowd && !value.affected_segment.startsWith("BS_")) {
+    context.addIssue({ code: "custom", path: ["affected_segment"], message: "人潮事件必須選擇站點" });
+  }
+  if (!isCrowd && !value.affected_segment.startsWith("RD_")) {
+    context.addIssue({ code: "custom", path: ["affected_segment"], message: "道路事件必須選擇路段" });
+  }
+});
 
 export const advisorAnswerSchema = z.object({
   answer: z.string().min(1),
   mode: z.string().optional(),
   tool_trace: z.array(z.unknown()).optional(),
 }).passthrough();
+
+const planComparisonKpisSchema = z.object({
+  emergency_eta_minutes: z.number().nonnegative(),
+  average_vehicle_wait_seconds: z.number().nonnegative(),
+  maximum_queue_vehicles: z.number().int().nonnegative(),
+  congested_segment_count: z.number().int().nonnegative(),
+  crowd_evacuation_minutes: z.number().nonnegative().nullable(),
+  pedestrian_service: z.string(),
+  control_side_effect_wait_seconds: z.number(),
+  focus_speed_kmh: z.number().nonnegative(),
+  focus_saturation: z.number().min(0).max(1.5),
+  ete_minutes: z.number().nonnegative().nullable(),
+});
+
+export const planComparisonSchema = z.object({
+  simulation_run_id: z.string().min(1),
+  scenario_id: z.string().min(1),
+  data_snapshot_id: z.string().min(1),
+  dataset_versions: z.record(z.string(), z.string().startsWith("sha256:")),
+  simulation_config: z.object({
+    step_seconds: z.number().int().positive(),
+    horizon_minutes: z.number().int().positive(),
+    random_seed: z.number().int().nonnegative(),
+    controller_version: z.string(),
+    manual_controls: z.object({
+      green_extension_pct: z.number().min(0).max(25),
+      diversion_share: z.number().min(0).max(.75),
+      police_units: z.number().int().min(0),
+    }).optional(),
+  }),
+  model_version: z.string(),
+  randomness_used: z.literal(false),
+  input_sha256: z.string().length(64),
+  output_sha256: z.string().length(64),
+  recommended_plan_id: z.string().nullable(),
+  recommendation_reason: z.string(),
+  score_formula: z.string(),
+  plans: z.array(z.object({
+    plan_id: z.string().min(1),
+    name: z.string(),
+    eligible: z.boolean(),
+    ineligible_reason: z.string().nullable().optional(),
+    state: z.string(),
+    tradeoff: z.string(),
+    score: z.number().nullable(),
+    kpis: planComparisonKpisSchema,
+    controls: z.object({
+      green_extension_pct: z.number(), diversion_share: z.number(), police_units: z.number().int(),
+    }).nullable().optional(),
+    constraints: z.array(z.object({ code: z.string(), passed: z.boolean(), detail: z.string() })).optional(),
+    executable_commands: z.array(z.record(z.string(), z.unknown())).optional(),
+    forecast_series: z.array(z.object({
+      minute: z.number(), focus_saturation: z.number(), focus_speed_kmh: z.number(),
+    })).optional(),
+  }).passthrough()).min(2),
+  approval_status: z.enum(["READY_FOR_APPROVAL", "NO_FEASIBLE_PLAN", "APPROVED_FOR_SIMULATION"]),
+  optimizer: z.object({
+    method: z.string(), evaluated_candidate_count: z.number().int().nonnegative(),
+    eligible_candidate_count: z.number().int().nonnegative(),
+    decision_variables: z.record(z.string(), z.array(z.number())),
+    hard_constraints: z.array(z.string()), forecast_horizon_minutes: z.number(),
+    rolling_reoptimization_minutes: z.number(),
+  }),
+  kpi_evidence: z.record(z.string(), z.string()),
+  limitations: z.array(z.string()),
+}).passthrough();
+
+export const planReplaySchema = z.object({
+  simulation_run_id: z.string().min(1),
+  replay_output_sha256: z.string().length(64),
+  original_output_sha256: z.string().length(64),
+  matches: z.boolean(),
+  replayed_at: z.string(),
+  random_seed: z.number().int().nonnegative(),
+  model_version: z.string(),
+});
 
 export function validatePayload<T>(schema: z.ZodType, payload: unknown, label: string): T {
   const result = schema.safeParse(payload);

@@ -14,6 +14,7 @@ from pathlib import Path
 
 from ..config import PROJECT_ROOT
 from ..data_loader import format_ts, parse_ts
+from ..simulation.incident_effects import project_incident
 from .coordinator import DataBundle
 
 
@@ -27,6 +28,7 @@ SIGNAL_RESTORE_BUFFER_SECONDS = 12
 PEDESTRIAN_CLEARANCE_SECONDS = 8
 MIN_CORRIDOR_SPEED_KMH = 32.0
 MAX_CORRIDOR_SPEED_KMH = 50.0
+SATURATION_ROUTE_PENALTY = 1.6
 
 
 def _distance_m(start: tuple[float, float], end: tuple[float, float]) -> float:
@@ -249,6 +251,9 @@ def _segment_metrics(bundle: DataBundle, snapshot) -> dict[str, dict]:
         signal_count = len(signals.get(segment_id, []))
         baseline_seconds = length_m / (speed / 3.6) + signal_count * BASE_SIGNAL_DELAY_SECONDS
         corridor_seconds = length_m / (corridor_speed / 3.6) + signal_count * CORRIDOR_SIGNAL_DELAY_SECONDS
+        congestion_multiplier = 1 + max(0.0, traffic["saturation_score"] - 0.5) * SATURATION_ROUTE_PENALTY
+        route_cost_seconds = baseline_seconds * congestion_multiplier
+        lane_status = str(traffic["lane_status"]).lower()
         result[segment_id] = {
             "segment_id": segment_id,
             "name": segment.name,
@@ -262,6 +267,9 @@ def _segment_metrics(bundle: DataBundle, snapshot) -> dict[str, dict]:
             "data_time": traffic["data_time"],
             "baseline_seconds": baseline_seconds,
             "corridor_seconds": corridor_seconds,
+            "congestion_multiplier": round(congestion_multiplier, 3),
+            "route_cost_seconds": round(route_cost_seconds, 2),
+            "impassable": "closed" in lane_status or "blocked" in lane_status,
         }
     return result
 
@@ -283,9 +291,11 @@ def _shortest_path(
         for neighbor in sorted(graph[current]):
             if neighbor in blocked or neighbor in path:
                 continue
+            if neighbor != destination and metrics[neighbor]["impassable"]:
+                continue
             heapq.heappush(
                 queue,
-                (cost + metrics[neighbor]["baseline_seconds"], neighbor, path),
+                (cost + metrics[neighbor]["route_cost_seconds"], neighbor, path),
             )
     raise ValueError("找不到避開封閉路段的連續救援路徑")
 
@@ -392,6 +402,14 @@ def simulate_green_corridor(bundle: DataBundle, scenario: dict) -> dict:
         raise ValueError("起點與目的路段不可設為封閉")
 
     snapshot = bundle.traffic_at(at)
+    incident_context = {"active": False}
+    if scenario.get("_incident_state"):
+        snapshot, incident_context = project_incident(
+            at=at,
+            baseline=snapshot,
+            incident_state=scenario["_incident_state"],
+            network=bundle.network,
+        )
     metrics = _segment_metrics(bundle, snapshot)
     route_ids = _shortest_path(_graph(bundle.network), metrics, origin, destination, blocked)
     roads, signals = _map_assets()
@@ -508,6 +526,9 @@ def simulate_green_corridor(bundle: DataBundle, scenario: dict) -> dict:
             "route_geometry_method": "trim_each_road_between_actual_entry_and_exit_junctions",
             "signal_source": "臺北市政府交通局路口時制號誌資料",
             "traffic_snapshot": format_ts(at),
+            "traffic_source": "incident_projection" if incident_context.get("active") else "organizer_snapshot",
+            "incident_id": incident_context.get("incident_id"),
+            "route_score_formula": "travel_time_seconds × (1 + max(0, saturation_score - 0.5) × 1.6)",
             "selected_signal_count": len(signal_actions),
             "estimated_segment_ids": [row["segment_id"] for row in route_details if row["source"] == "estimated_fallback"],
             "constants": {
@@ -516,6 +537,7 @@ def simulate_green_corridor(bundle: DataBundle, scenario: dict) -> dict:
                 "minimum_corridor_speed_kmh": MIN_CORRIDOR_SPEED_KMH,
                 "maximum_corridor_speed_kmh": MAX_CORRIDOR_SPEED_KMH,
                 "pedestrian_clearance_seconds": PEDESTRIAN_CLEARANCE_SECONDS,
+                "saturation_route_penalty": SATURATION_ROUTE_PENALTY,
             },
         },
         "decision_trace": [
@@ -526,7 +548,7 @@ def simulate_green_corridor(bundle: DataBundle, scenario: dict) -> dict:
             {"step": "ETA_RECALCULATED", "detail": {"before": eta_before, "after": eta_after}},
             {"step": "HUMAN_APPROVAL_REQUIRED", "detail": {"status": "READY_FOR_APPROVAL"}},
         ],
-        "model": "deterministic-green-corridor-v1",
+        "model": "deterministic-green-corridor-v2-traffic-weighted",
         "approval_status": "READY_FOR_APPROVAL",
         "production_state_modified": False,
         "limitations": "號誌燈相、救援車位置與 ETA 為決策沙盒推估；未連接真實車聯網或號誌控制器。",

@@ -5,6 +5,8 @@ import {
   customIncidentInputSchema,
   greenCorridorSchema,
   incidentStateSchema,
+  planComparisonSchema,
+  planReplaySchema,
   runtimeStateSchema,
   simViewSchema,
   validatePayload,
@@ -57,7 +59,9 @@ export interface SimView {
     starts_at?: string;
     elapsed_minutes?: number;
     affected_segment_id?: string;
+    affected_station_id?: string;
     changed_segment_ids?: string[];
+    changed_station_ids?: string[];
     dynamic_routing?: any;
     baseline_source?: string;
     deterministic?: boolean;
@@ -65,6 +69,7 @@ export interface SimView {
     response_phase?: "OBSTACLE_ACTIVE" | "DISPATCHING" | "CLEARANCE_ACTIVE" | "CLEARED";
     response_started_at?: string | null;
     accepted_action_ids?: string[];
+    action_effectiveness?: Record<string, number>;
     accepted_action_ratio?: number;
     mitigation_progress?: number;
     capacity_factor?: number;
@@ -129,6 +134,7 @@ export interface SimulationResetResult {
     notifications: number;
     green_corridors: number;
     custom_runs: number;
+    plan_comparison_runs: number;
     llm_audit_entries: number;
   };
   view: SimView;
@@ -183,6 +189,79 @@ export interface IncidentState {
   simulation_run_id?: string;
   input_sha256?: string;
   errors: string[];
+}
+
+export interface PlanComparisonKpis {
+  emergency_eta_minutes: number;
+  average_vehicle_wait_seconds: number;
+  maximum_queue_vehicles: number;
+  congested_segment_count: number;
+  crowd_evacuation_minutes: number | null;
+  pedestrian_service: string;
+  control_side_effect_wait_seconds: number;
+  focus_speed_kmh: number;
+  focus_saturation: number;
+  ete_minutes: number | null;
+}
+
+export interface PlanComparisonPlan {
+  plan_id: string;
+  name: string;
+  eligible: boolean;
+  ineligible_reason?: string | null;
+  state: string;
+  tradeoff: string;
+  score: number | null;
+  kpis: PlanComparisonKpis;
+  controls?: ManualPlanControls | null;
+  constraints?: { code: string; passed: boolean; detail: string }[];
+  executable_commands?: Record<string, unknown>[];
+  forecast_series?: { minute: number; focus_saturation: number; focus_speed_kmh: number }[];
+}
+
+export interface ManualPlanControls {
+  green_extension_pct: number;
+  diversion_share: number;
+  police_units: number;
+}
+
+export interface PlanComparisonRun {
+  simulation_run_id: string;
+  scenario_id: string;
+  data_snapshot_id: string;
+  dataset_versions: Record<string, string>;
+  simulation_config: {
+    step_seconds: number;
+    horizon_minutes: number;
+    random_seed: number;
+    controller_version: string;
+  };
+  model_version: string;
+  randomness_used: false;
+  input_sha256: string;
+  output_sha256: string;
+  recommended_plan_id: string | null;
+  recommendation_reason: string;
+  score_formula: string;
+  plans: PlanComparisonPlan[];
+  kpi_evidence: Record<string, string>;
+  limitations: string[];
+  approval_status: "READY_FOR_APPROVAL" | "NO_FEASIBLE_PLAN" | "APPROVED_FOR_SIMULATION";
+  optimizer: {
+    method: string; evaluated_candidate_count: number; eligible_candidate_count: number;
+    decision_variables: Record<string, number[]>; hard_constraints: string[];
+    forecast_horizon_minutes: number; rolling_reoptimization_minutes: number;
+  };
+}
+
+export interface PlanComparisonReplay {
+  simulation_run_id: string;
+  replay_output_sha256: string;
+  original_output_sha256: string;
+  matches: boolean;
+  replayed_at: string;
+  random_seed: number;
+  model_version: string;
 }
 
 async function post<T>(url: string, body?: unknown, schema?: ZodType): Promise<T> {
@@ -258,6 +337,7 @@ export interface GreenCorridorResult {
     segment_id: string; name: string; length_m: number; signal_count: number;
     baseline_speed_kmh: number; corridor_speed_kmh: number; saturation_score: number;
     baseline_minutes: number; corridor_minutes: number; source: string; data_time: string | null;
+    route_cost_seconds: number; congestion_multiplier: number; impassable: boolean;
   }[];
   blocked_segment_ids: string[];
   eta: {
@@ -303,6 +383,17 @@ export const api = {
   simTick: () => post<SimView>("/api/simulation/tick", undefined, simViewSchema),
   simState: () => get<SimView>("/api/simulation/state", simViewSchema),
   simReset: () => post<SimulationResetResult>("/api/simulation/reset"),
+  createPlanComparison: (incidentId: string, randomSeed = 42, manualControls?: ManualPlanControls) =>
+    post<PlanComparisonRun>("/api/simulation/plan-comparison", {
+      incident_id: incidentId,
+      random_seed: randomSeed,
+      manual_controls: manualControls,
+    }, planComparisonSchema),
+  approvePlanComparison: (runId: string, planId: string, approvedBy = "指揮官") =>
+    post<{ simulation_run_id: string; scenario_id: string; approval_status: string; approved_plan: Record<string, unknown> }>(
+      `/api/simulation/plan-comparison/${runId}/approve`, { plan_id: planId, approved_by: approvedBy }),
+  replayPlanComparison: (runId: string) =>
+    post<PlanComparisonReplay>(`/api/simulation/plan-comparison/${runId}/replay`, undefined, planReplaySchema),
   timeline: () => get<{ timestamps: string[]; markers: { index: number; time: string; kind: string | null }[] }>("/api/simulation/timeline"),
   inject: (event_id: string) => post<IncidentState>("/api/incidents/inject", { event_id }, incidentStateSchema),
   incidents: () => get<{ available: any[]; processed: string[] }>("/api/incidents"),
@@ -320,6 +411,7 @@ export const api = {
   greenCorridorState: (scenarioId: string, elapsedSeconds: number) =>
     get<GreenCorridorResult["runtime_state"]>(`/api/green-corridor/${scenarioId}/state?elapsed_seconds=${elapsedSeconds}`, runtimeStateSchema),
   roadNetwork: () => get<any[]>("/api/road-network"),
+  crowdStations: () => get<{ station_id: string; name: string }[]>("/api/crowd-stations"),
   sop: () => get<{ rule_id: number; title: string; text: string }[]>("/api/sop"),
   resources: () => get<Resource[]>("/api/resources"),
   resetResources: () => post<any>("/api/resources/reset"),

@@ -30,6 +30,17 @@ describe("Zod trust boundary", () => {
     expect(customIncidentInputSchema.safeParse(invalid).success).toBe(false);
   });
 
+  it("accepts crowd parameters only with a station target", () => {
+    const crowd = {
+      type: "Crowd_Surge_Injury", affected_segment: "BS_MRT_BL17", status: "Surging",
+      severity: "High", location: "捷運國父紀念館站", description: "五分鐘人潮快速增加",
+      timestamp: "2026-05-20 22:00", crowd_user_count_override: 30_000,
+      crowd_growth_rate_override: 0.5, crowd_roaming_user_pct_override: 35,
+    };
+    expect(customIncidentInputSchema.safeParse(crowd).success).toBe(true);
+    expect(customIncidentInputSchema.safeParse({ ...crowd, affected_segment: "RD_TPE_001" }).success).toBe(false);
+  });
+
   it("blocks malformed simulation payloads before they reach the UI", () => {
     expect(() => validatePayload(simViewSchema, {
       playing: true,

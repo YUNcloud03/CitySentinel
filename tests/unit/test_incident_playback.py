@@ -128,3 +128,33 @@ def test_clearance_starts_only_after_decision_acceptance_and_improves_over_time(
     assert later["simulation_context"]["mitigation_progress"] > improving["simulation_context"]["mitigation_progress"]
     assert later["traffic"]["RD_TPE_002"]["avg_speed"] >= later["traffic"]["RD_TPE_002"]["event_avg_speed"]
     assert later["traffic"]["RD_TPE_002"]["saturation_score"] <= later["traffic"]["RD_TPE_002"]["event_saturation_score"]
+
+
+def test_manual_resource_reduction_has_less_effect_than_accepting_recommendation():
+    def run(adjust_first_action: bool):
+        bundle = DataBundle()
+        coordinator = Coordinator(bundle)
+        player = SimulationPlayer(bundle)
+        state = coordinator.inject_incident("TPE_2026_ACC_001")
+        player.activate_incident(state)
+        adjusted = False
+        for action in state["dispatch"]["actions"]:
+            if adjust_first_action and not adjusted and action["requested_count"] > 1:
+                coordinator.dispatch_action(
+                    state["incident_id"], action["action_id"], "adjust", count=1,
+                    operator="test_commander", simulation_time="2026-05-20 22:00",
+                )
+                adjusted = True
+            else:
+                coordinator.dispatch_action(
+                    state["incident_id"], action["action_id"], "accept",
+                    operator="test_commander", simulation_time="2026-05-20 22:00",
+                )
+        return player.seek("2026-05-20 22:20")
+
+    accepted = run(False)
+    reduced = run(True)
+    assert reduced["simulation_context"]["accepted_action_ratio"] < accepted["simulation_context"]["accepted_action_ratio"]
+    assert reduced["simulation_context"]["mitigation_progress"] < accepted["simulation_context"]["mitigation_progress"]
+    assert reduced["simulation_context"]["capacity_factor"] < accepted["simulation_context"]["capacity_factor"]
+    assert reduced["traffic"]["RD_TPE_002"]["saturation_score"] > accepted["traffic"]["RD_TPE_002"]["saturation_score"]

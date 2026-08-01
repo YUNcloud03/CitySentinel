@@ -2,7 +2,7 @@
 //   固定高度不捲動 · 一張常駐地圖 · 右側 Tab 情境抽屜（事件/決策/通知/證據）
 //   底部時間條 + 抽屜入口（預警/決策鏈/What-if）· 分級告警（Alert Rail + 快報卡 + 限定 modal）
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, type DecisionResult, type GreenCorridorResult, type IncidentState, type Resource, type SimView, type ValidationSlaMeasurement } from "./api";
+import { api, type DecisionResult, type GreenCorridorResult, type IncidentState, type ManualPlanControls, type PlanComparisonReplay, type PlanComparisonRun, type Resource, type SimView, type ValidationSlaMeasurement } from "./api";
 import GreenCorridorPanel from "./GreenCorridorPanel";
 import MapView from "./MapView";
 import DecisionSandbox from "./DecisionSandbox";
@@ -30,6 +30,9 @@ interface Props {
   resourceKey: number;
   simulationGeneration: number;
   validationSla?: ValidationSlaMeasurement | null;
+  incidentAcknowledged: boolean;
+  onAcknowledgeIncident: (incidentId: string) => void;
+  onDecisionAccepted: () => Promise<void> | void;
   onScenarioRendered?: (incidentId: string) => void;
   onInject: (id: string) => void;
   onInjectedCustom: (state: IncidentState) => void;
@@ -37,14 +40,25 @@ interface Props {
   onSeekIndex: (timestamp: string) => void;
 }
 
-function ScenarioVerificationCard({ view, incident, mode, onModeChange, validationSla, onCollapse }: {
+function ScenarioVerificationCard({ view, incident, mode, onModeChange, validationSla, planComparison, planError, replay, replayBusy, onReplay, onChallenge, onApprove, onCollapse }: {
   view: SimView | null;
   incident: IncidentState | null;
   mode: ComparisonMode;
   onModeChange: (mode: ComparisonMode) => void;
   validationSla?: ValidationSlaMeasurement | null;
+  planComparison: PlanComparisonRun | null;
+  planError: string | null;
+  replay: PlanComparisonReplay | null;
+  replayBusy: boolean;
+  onReplay: () => void;
+  onChallenge: (controls: ManualPlanControls) => Promise<void>;
+  onApprove: (planId: string) => Promise<void>;
   onCollapse: () => void;
 }) {
+  const [greenPct, setGreenPct] = useState(10);
+  const [diversionPct, setDiversionPct] = useState(25);
+  const [policeUnits, setPoliceUnits] = useState(0);
+  const [actionBusy, setActionBusy] = useState(false);
   const comparison = view?.scenario_comparison;
   const backendRows = comparison?.scenarios;
   const stateLabels: Record<string, string> = {
@@ -95,9 +109,69 @@ function ScenarioVerificationCard({ view, incident, mode, onModeChange, validati
           </button>
         ))}
       </div>
+      {(planComparison || planError) && (
+        <details className="plan-comparison">
+          <summary>
+            <span>動態最佳化與人工 Challenge</span>
+            {planComparison?.recommended_plan_id && (
+              <b>建議 {planComparison.plans.find((row) => row.plan_id === planComparison.recommended_plan_id)?.name}</b>
+            )}
+            <small>搜尋 {planComparison?.optimizer.evaluated_candidate_count ?? 0} 組 · 可重播驗證</small>
+          </summary>
+          {planError ? <p className="plan-error">{planError}</p> : planComparison && (
+            <>
+              <div className="plan-table" role="table" aria-label="處置方案 KPI 比較">
+                <div className="plan-row plan-head" role="row">
+                  <span>方案</span><span>目標速度</span><span>飽和度</span><span>平均等待</span>
+                  <span>壅塞路段</span><span>副作用</span><span>分數</span>
+                </div>
+                {planComparison.plans.map((plan) => (
+                  <div key={plan.plan_id} className={`plan-row ${plan.plan_id === planComparison.recommended_plan_id ? "recommended" : ""} ${!plan.eligible && plan.plan_id !== "BASELINE" ? "ineligible" : ""}`} role="row">
+                    <span><b>{plan.name}</b>{plan.plan_id === planComparison.recommended_plan_id && <em>建議</em>}</span>
+                    <span>{plan.kpis.focus_speed_kmh} km/h</span>
+                    <span>{plan.kpis.focus_saturation.toFixed(2)}</span>
+                    <span>{plan.kpis.average_vehicle_wait_seconds} 秒</span>
+                    <span>{plan.kpis.congested_segment_count}</span>
+                    <span>{plan.kpis.control_side_effect_wait_seconds > 0 ? `+${plan.kpis.control_side_effect_wait_seconds} 秒` : "0 秒"}</span>
+                    <span>{plan.score == null ? "基準" : plan.score.toFixed(3)}</span>
+                    <small>{plan.ineligible_reason ?? plan.tradeoff}</small>
+                    {plan.controls && <small className="plan-controls">綠燈 +{plan.controls.green_extension_pct}%｜引流 {Math.round(plan.controls.diversion_share * 100)}%｜警力 {plan.controls.police_units}</small>}
+                    {plan.constraints?.filter((row) => !row.passed).map((row) => <small className="plan-constraint-fail" key={row.code}>{row.code}：{row.detail}</small>)}
+                  </div>
+                ))}
+              </div>
+              <div className="manual-challenge" aria-label="人工方案挑戰">
+                <b>人工方案：用同一模型重新驗證</b>
+                <label>綠燈延長 %<input type="number" min="0" max="25" value={greenPct} onChange={(event) => setGreenPct(Number(event.target.value))} /></label>
+                <label>引流比例 %<input type="number" min="0" max="75" step="25" value={diversionPct} onChange={(event) => setDiversionPct(Number(event.target.value))} /></label>
+                <label>警力人數<input type="number" min="0" max="12" value={policeUnits} onChange={(event) => setPoliceUnits(Number(event.target.value))} /></label>
+                <button type="button" disabled={actionBusy} onClick={async () => {
+                  setActionBusy(true);
+                  try { await onChallenge({ green_extension_pct: greenPct, diversion_share: diversionPct / 100, police_units: policeUnits }); }
+                  finally { setActionBusy(false); }
+                }}>驗證人工方案</button>
+                {planComparison.recommended_plan_id && <button type="button" className="approve-optimized" disabled={actionBusy || planComparison.approval_status === "APPROVED_FOR_SIMULATION"} onClick={async () => {
+                  setActionBusy(true);
+                  try { await onApprove(planComparison.recommended_plan_id!); }
+                  finally { setActionBusy(false); }
+                }}>{planComparison.approval_status === "APPROVED_FOR_SIMULATION" ? "已套用模擬" : "核准最佳方案並套用"}</button>}
+              </div>
+              <div className="plan-proof">
+                <span>Run <code>{planComparison.simulation_run_id}</code></span>
+                <span>Seed <code>{planComparison.simulation_config.random_seed}</code></span>
+                <span>Output SHA <code>{planComparison.output_sha256.slice(0, 12)}…</code></span>
+                <button type="button" onClick={onReplay} disabled={replayBusy}>{replayBusy ? "重播中…" : "重播並驗證"}</button>
+                {replay && <b className={replay.matches ? "replay-pass" : "replay-fail"}>{replay.matches ? "雜湊一致 ✓" : "結果不一致 ✕"}</b>}
+              </div>
+              <p className="plan-disclaimer">等待、排隊與救援 ETA 為透明代理值；缺少方向性行人感測資料的 KPI 明確標為未量測，不由 LLM 補值。</p>
+            </>
+          )}
+        </details>
+      )}
       <div className="verification-proof-row">
         <span>影響路段 <b>{view?.simulation_context?.changed_segment_ids?.length ?? 0}</b></span>
         <span>計算模型 <b>{view?.simulation_context?.deterministic ? "可重播" : "資料基準"}</b></span>
+        {view?.simulation_context?.active && <span>決策效力 <b>{Math.round((view.simulation_context.accepted_action_ratio ?? 0) * 100)}%</b></span>}
         {comparison && <span>Run <b>{comparison.simulation_run_id}</b></span>}
         <span>引擎 <b>{performance ? `${performance.total_processing_ms} ms` : "待事件注入"}</b></span>
         <span>API 完成 <b>{validationSla ? `${validationSla.api_ready_ms} ms` : "—"}</b></span>
@@ -243,11 +317,16 @@ export default function Cockpit(p: Props) {
   const [notis, setNotis] = useState<any[]>([]);
   const [muted, setMuted] = useState<string | null>(null);
   const [selectedSegment, setSelectedSegment] = useState<string | null>(null);
+  const [mapFocusEntity, setMapFocusEntity] = useState<string | null>(null);
   const [preview, setPreview] = useState<DecisionResult | null>(null);
   const [corridor, setCorridor] = useState<GreenCorridorResult | null>(null);
   const [attentionIncidentId, setAttentionIncidentId] = useState<string | null>(null);
   const [comparisonMode, setComparisonMode] = useState<ComparisonMode>("current");
   const [verificationCollapsed, setVerificationCollapsed] = useState(false);
+  const [planComparison, setPlanComparison] = useState<PlanComparisonRun | null>(null);
+  const [planError, setPlanError] = useState<string | null>(null);
+  const [planReplay, setPlanReplay] = useState<PlanComparisonReplay | null>(null);
+  const [planBusy, setPlanBusy] = useState(false);
   const prevIncidentRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -260,18 +339,88 @@ export default function Cockpit(p: Props) {
     setBottom(null);
     setMuted(null);
     setSelectedSegment(null);
+    setMapFocusEntity(null);
     setPreview(null);
     setCorridor(null);
     setAttentionIncidentId(null);
     setComparisonMode("current");
     setVerificationCollapsed(false);
+    setPlanComparison(null);
+    setPlanError(null);
+    setPlanReplay(null);
+    setPlanBusy(false);
     prevIncidentRef.current = null;
   }, [p.simulationGeneration]);
+
+  useEffect(() => {
+    const incidentId = p.incident?.incident_id;
+    if (!incidentId) {
+      setPlanComparison(null);
+      setPlanError(null);
+      setPlanReplay(null);
+      return;
+    }
+    let cancelled = false;
+    setPlanComparison(null);
+    setPlanError(null);
+    setPlanReplay(null);
+    api.createPlanComparison(incidentId)
+      .then((result) => { if (!cancelled) setPlanComparison(result); })
+      .catch((error: unknown) => {
+        if (!cancelled) setPlanError(error instanceof Error ? error.message : "方案比較建立失敗");
+      });
+    return () => { cancelled = true; };
+  }, [p.incident?.incident_id, p.resourceKey]);
+
+  const replayPlan = useCallback(async () => {
+    if (!planComparison || planBusy) return;
+    setPlanBusy(true);
+    setPlanReplay(null);
+    try {
+      setPlanReplay(await api.replayPlanComparison(planComparison.simulation_run_id));
+    } catch (error) {
+      setPlanError(error instanceof Error ? error.message : "重播驗證失敗");
+    } finally {
+      setPlanBusy(false);
+    }
+  }, [planComparison, planBusy]);
+
+  const challengePlan = useCallback(async (controls: ManualPlanControls) => {
+    const incidentId = p.incident?.incident_id;
+    if (!incidentId) return;
+    setPlanBusy(true);
+    setPlanError(null);
+    try {
+      setPlanComparison(await api.createPlanComparison(incidentId, 42, controls));
+      setPlanReplay(null);
+    } catch (error) {
+      setPlanError(error instanceof Error ? error.message : "人工方案驗證失敗");
+    } finally {
+      setPlanBusy(false);
+    }
+  }, [p.incident?.incident_id]);
+
+  const approvePlan = useCallback(async (planId: string) => {
+    if (!planComparison) return;
+    setPlanBusy(true);
+    setPlanError(null);
+    try {
+      await api.approvePlanComparison(planComparison.simulation_run_id, planId);
+      setPlanComparison({ ...planComparison, approval_status: "APPROVED_FOR_SIMULATION" });
+      setComparisonMode("current");
+      await p.onDecisionAccepted();
+    } catch (error) {
+      setPlanError(error instanceof Error ? error.message : "最佳方案核准失敗");
+    } finally {
+      setPlanBusy(false);
+    }
+  }, [planComparison, p.onDecisionAccepted]);
 
   // 新事件建立 → 自動切到「決策」Tab、顯示快報卡（非阻塞）
   useEffect(() => {
     const id = p.incident?.incident_id ?? null;
-    if (id && id !== prevIncidentRef.current) {
+    if (id && id !== prevIncidentRef.current && !p.incidentAcknowledged
+      && p.incident?.operational_status !== "RESOLVED") {
       setTab("decision");
       setMuted(null);
       setAttentionIncidentId(id);
@@ -280,7 +429,7 @@ export default function Cockpit(p: Props) {
     }
     if (!id) setComparisonMode("current");
     prevIncidentRef.current = id;
-  }, [p.incident?.incident_id]);
+  }, [p.incident?.incident_id, p.incident?.operational_status, p.incidentAcknowledged]);
 
   const pendingNotis = notis.filter((n) => n.status === "READY_FOR_APPROVAL").length;
   // 限定 modal：資源缺口（無可用資源）——真正需人工決策才阻塞
@@ -291,6 +440,7 @@ export default function Cockpit(p: Props) {
     && p.incident.event.severity && ["Critical", "High"].includes(p.incident.event.severity);
   const showIncidentMessage = Boolean(
     p.incident && attentionIncidentId === p.incident.incident_id
+    && !p.incidentAcknowledged && p.incident.operational_status !== "RESOLVED"
   );
 
   const alertCount = p.view?.active_alerts?.length ?? 0;
@@ -306,7 +456,10 @@ export default function Cockpit(p: Props) {
           </button>
         : <ScenarioVerificationCard view={p.view} incident={p.incident}
             mode={comparisonMode} onModeChange={setComparisonMode}
-            validationSla={p.validationSla} onCollapse={() => setVerificationCollapsed(true)} />)}
+            validationSla={p.validationSla} planComparison={planComparison}
+            planError={planError} replay={planReplay} replayBusy={planBusy}
+            onReplay={replayPlan} onChallenge={challengePlan} onApprove={approvePlan}
+            onCollapse={() => setVerificationCollapsed(true)} />)}
 
       <div className="cockpit-body">
         <div className="map-region">
@@ -315,6 +468,7 @@ export default function Cockpit(p: Props) {
             onComparisonModeChange={setComparisonMode}
             onScenarioRendered={p.onScenarioRendered}
             selectedSegmentId={selectedSegment}
+            focusEntityId={mapFocusEntity}
             projectedTraffic={preview?.projected_traffic}
             greenCorridor={corridor}
             onSelectSegment={(segmentId) => {
@@ -332,10 +486,11 @@ export default function Cockpit(p: Props) {
 
         <aside className="right-drawer">
           <div className="rd-tabs">
-            {([["event", "事件"], ["decision", "建議"], ["rescue", "救援"], ["sandbox", "推演"], ["notify", "通知"], ["evidence", "證據"]] as [DrawerTab, string][])
-              .map(([id, label]) => (
+            {([["event", "事件", "即時狀況"], ["decision", "建議", "處置方案"], ["rescue", "救援", "綠色走廊"], ["sandbox", "推演", "人工模擬"], ["notify", "通知", "推播管理"], ["evidence", "證據", "資料驗證"]] as [DrawerTab, string, string][])
+              .map(([id, label, hint]) => (
                 <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>
-                  {label}
+                  <span>{label}</span>
+                  <small>{hint}</small>
                   {id === "notify" && pendingNotis > 0 && <span className="tab-dot" />}
                   {id === "decision" && p.incident && <span className="tab-dot blue" />}
                   {id === "rescue" && corridor && <span className="tab-dot green" />}
@@ -355,7 +510,8 @@ export default function Cockpit(p: Props) {
             )}
             {tab === "decision" && (
               p.incident
-                ? <IncidentDetail incident={p.incident} onRefresh={p.onRefresh} />
+                ? <IncidentDetail incident={p.incident} onRefresh={p.onRefresh}
+                    onDecisionAccepted={p.onDecisionAccepted} />
                 : <p className="dim">從「事件」Tab 注入事件後，此處顯示 Coordinator 建議、疏散方案與資源調度。</p>
             )}
             {tab === "rescue" && <GreenCorridorPanel view={p.view} result={corridor} onResult={setCorridor} />}
@@ -388,8 +544,22 @@ export default function Cockpit(p: Props) {
             <button onClick={() => setBottom(null)}>✕ 收合</button>
           </div>
           <div className="bp-body">
-            {bottom === "alerts" && <AlertFeed alerts={p.view?.active_alerts ?? []} />}
-            {bottom === "trace" && <DecisionStages incident={p.incident} />}
+            {bottom === "alerts" && <AlertFeed alerts={p.view?.active_alerts ?? []} view={p.view}
+              onLocate={(alert) => {
+                setMapFocusEntity(alert.entity_id);
+                if (alert.entity_id.startsWith("RD_")) {
+                  setSelectedSegment(alert.entity_id);
+                  setTab("sandbox");
+                } else {
+                  setTab("event");
+                }
+                setBottom(null);
+              }}
+              onEvidence={() => { setTab("evidence"); setBottom(null); }} />}
+            {bottom === "trace" && <DecisionStages incident={p.incident}
+              onGoDecision={() => { setTab("decision"); setBottom(null); }}
+              onGoEvidence={() => { setTab("evidence"); setBottom(null); }}
+              onGoNotify={() => { setTab("notify"); setBottom(null); }} />}
             {bottom === "whatif" && <WhatIfPanel />}
           </div>
         </div>
@@ -425,8 +595,12 @@ export default function Cockpit(p: Props) {
               <p className="dim small">此視窗僅要求決策者注意，不會自動執行號誌控制、資源調度或民眾推播。</p>
             </div>
             <div className="em-footer incident-message-actions">
-              <button type="button" onClick={() => setAttentionIncidentId(null)}>稍後處理</button>
+              <button type="button" onClick={() => {
+                p.onAcknowledgeIncident(p.incident!.incident_id);
+                setAttentionIncidentId(null);
+              }}>確認收到</button>
               <button type="button" className="primary" autoFocus onClick={() => {
+                p.onAcknowledgeIncident(p.incident!.incident_id);
                 setAttentionIncidentId(null);
                 setTab("decision");
               }}>立即檢視決策</button>

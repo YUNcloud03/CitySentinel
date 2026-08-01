@@ -12,6 +12,10 @@ def test_reset_clears_runtime_state_and_restores_baseline():
     )
     assert incident.status_code == 200
     assert client.get("/api/notifications").json()
+    plan_run = client.post("/api/simulation/plan-comparison", json={
+        "incident_id": incident.json()["incident_id"], "random_seed": 42,
+    })
+    assert plan_run.status_code == 200
 
     corridor = client.post("/api/green-corridor/simulate", json={
         "at": "2026-05-20 22:00",
@@ -33,11 +37,15 @@ def test_reset_clears_runtime_state_and_restores_baseline():
     assert body["cleared"]["incidents"] >= 1
     assert body["cleared"]["notifications"] >= 1
     assert body["cleared"]["green_corridors"] >= 1
+    assert body["cleared"]["plan_comparison_runs"] >= 1
 
     assert client.get("/api/incidents").json()["processed"] == []
     assert client.get("/api/notifications").json() == []
     assert client.get("/api/green-corridor/runs").json() == []
     assert client.get("/api/simulation-runs").json() == []
+    assert client.get(
+        f"/api/simulation/plan-comparison/{plan_run.json()['simulation_run_id']}"
+    ).status_code == 404
     resources = client.get("/api/resources").json()
     assert all(row["available_count"] == row["total_count"] for row in resources)
 
@@ -52,6 +60,7 @@ def test_reset_is_idempotent():
         "notifications": 0,
         "green_corridors": 0,
         "custom_runs": 0,
+        "plan_comparison_runs": 0,
         "llm_audit_entries": 0,
     }
     assert second.json()["view"]["sim_time"] == "2026-05-20 21:00"

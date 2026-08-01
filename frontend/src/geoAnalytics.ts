@@ -31,6 +31,7 @@ export function h3ResolutionForZoom(zoom: number): number {
 export function incidentImpactGeoJSON(
   incident: IncidentState | null,
   coordinate?: Coordinate | null,
+  view?: SimView | null,
 ) {
   if (!incident || !coordinate) {
     return { type: "FeatureCollection" as const, features: [] };
@@ -43,6 +44,10 @@ export function incidentImpactGeoJSON(
     severity,
     radius_m: Math.round(radiusKm * 1000),
     calculation: "@turf/circle",
+    radius_policy: "Critical 650m｜High 450m｜Medium 300m｜Low 180m",
+    affected_segment: String(incident.event.affected_segment ?? ""),
+    changed_segment_ids: view?.simulation_context?.changed_segment_ids?.join(",") ?? "",
+    interpretation: "決策提示與推播檢索圈；不是物理災害擴散預測",
   };
   return { type: "FeatureCollection" as const, features: [feature] };
 }
@@ -69,9 +74,13 @@ export function riskGridGeoJSON(
     crowd: number[];
     trafficIds: string[];
     stationIds: string[];
+    trafficNames: string[];
+    stationNames: string[];
   }>();
   const bucket = (cell: string) => {
-    if (!cells.has(cell)) cells.set(cell, { traffic: [], crowd: [], trafficIds: [], stationIds: [] });
+    if (!cells.has(cell)) cells.set(cell, {
+      traffic: [], crowd: [], trafficIds: [], stationIds: [], trafficNames: [], stationNames: [],
+    });
     return cells.get(cell)!;
   };
 
@@ -84,6 +93,7 @@ export function riskGridGeoJSON(
     const item = bucket(cell);
     item.traffic.push(clamp01(traffic.saturation_score / 1.05));
     item.trafficIds.push(segmentId);
+    item.trafficNames.push(traffic.road_name || (road.properties as any).name || segmentId);
   }
 
   for (const [stationId, [lng, lat]] of Object.entries(stations)) {
@@ -95,6 +105,7 @@ export function riskGridGeoJSON(
     const item = bucket(latLngToCell(lat, lng, resolution));
     item.crowd.push(0.55 * load + 0.25 * growth + 0.2 * roaming);
     item.stationIds.push(stationId);
+    item.stationNames.push(crowd.location_name || stationId);
   }
 
   const features = [...cells.entries()].map(([cell, values]) => {
@@ -108,10 +119,14 @@ export function riskGridGeoJSON(
         h3_index: cell,
         h3_resolution: resolution,
         risk,
+        traffic_risk: Math.round(trafficRisk * 1000) / 1000,
+        crowd_risk: Math.round(crowdRisk * 1000) / 1000,
         level: risk >= 0.9 ? "高" : risk >= 0.7 ? "中" : "低",
         traffic_entities: values.trafficIds.join(","),
         crowd_entities: values.stationIds.join(","),
-        calculation: "max(traffic_saturation/1.05, crowd_weighted_index)",
+        traffic_names: [...new Set(values.trafficNames)].join("、"),
+        crowd_names: [...new Set(values.stationNames)].join("、"),
+        calculation: "max(traffic_saturation/1.05, 0.55×people_load + 0.25×growth + 0.20×roaming)",
       },
       geometry: { type: "Polygon" as const, coordinates: [boundary] },
     };
