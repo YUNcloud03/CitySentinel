@@ -69,6 +69,70 @@ def test_evt_003_power_failure(coordinator):
     assert "現場指揮" in state["notifications"]["cms"]
 
 
+def test_evt_003_public_message_has_four_elements(coordinator):
+    """回歸測試：無疏散路徑的事件（只觸發 SOP 5）簡訊仍須具備四要素。
+
+    修正前此案例只產出「松高路交通管制中，請依現場指揮通行。」——
+    說不出事故原因、丟失 ETE 41 分、也沒有求援提醒。
+    """
+    state = coordinator.inject_incident("TPE_2026_EVT_003")
+    zh = state["notifications"]["messages"]["zh"]
+
+    assert "松高路" in zh                      # 事故位置
+    assert "號誌故障" in zh                    # 事故原因（修正前完全缺席）
+    assert "現場指揮" in zh                    # 通行指引
+    assert "41" in zh                          # 預計延誤（修正前被丟棄）
+    assert "110" in zh and "119" in zh         # 求援提醒
+    assert "避開" in zh
+
+
+def test_sop6_triggered_gives_four_languages_with_reason(coordinator):
+    """官方三份 Demo 事件的時間切面皆有台北101 漫遊 45% → SOP 6 觸發，四語齊出。"""
+    state = coordinator.inject_incident("TPE_2026_EVT_003")
+    noti = state["notifications"]
+    decision = noti["multilingual_decision"]
+
+    assert noti["multilingual_required"] is True
+    assert sorted(noti["messages"]) == ["en", "ja", "ko", "zh"]
+    assert decision["triggered"] is True
+    assert decision["threshold_pct"] == 30.0
+    assert decision["max_roaming_pct"] == 45.0
+    assert "台北101廣場" in decision["reason"] and "觸發" in decision["reason"]
+
+
+def test_sop6_not_triggered_is_chinese_only(coordinator):
+    """SOP 6 未觸發 → 僅產出中文，且判定說明須報出實際最高漫遊率。
+
+    官方資料在事件時間點皆已觸發，故改以低漫遊率的時間切面（17:00）直接
+    驗證判定分支——此為「未觸發僅中文」這條規格的唯一可測路徑。
+    """
+    from datetime import datetime
+
+    at = datetime(2026, 5, 20, 17, 0)
+    decision = coordinator._multilingual_decision(at, [])
+
+    assert decision["triggered"] is False
+    assert decision["threshold_pct"] == 30.0
+    # 未觸發時仍須說得出實際最高漫遊率，而非只回一個 false
+    assert decision["max_roaming_pct"] is not None
+    assert decision["max_roaming_pct"] < 30.0
+    assert "未觸發" in decision["reason"] and "僅產出中文" in decision["reason"]
+
+
+def test_acc_001_public_message_has_four_elements(coordinator):
+    """有疏散路徑的事件同樣須四要素齊全（確認未回歸）。"""
+    state = coordinator.inject_incident("TPE_2026_ACC_001")
+    msgs = state["notifications"]["messages"]
+    zh = msgs["zh"]
+
+    assert "光復南路" in zh and "路面塌陷" in zh
+    assert "市民大道四段" in zh
+    assert "90" in zh
+    assert "110" in zh and "119" in zh
+    # 每一語言都必須帶求援號碼（多語觸發時）
+    assert all("110" in m and "119" in m for m in msgs.values())
+
+
 def test_what_if_bl17_40000(coordinator):
     """場景 6：如果 BL17 人數增加到 40,000 人會怎樣？（於 17:00，基準未觸發第 3 條）"""
     result = run_what_if(coordinator.bundle, {

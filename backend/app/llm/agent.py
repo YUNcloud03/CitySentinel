@@ -284,12 +284,13 @@ class AdvisorAgent:
     def _llm_step(self, messages: list) -> tuple[str, object]:
         """回傳 ("tools", [(id, name, args), ...]) 或 ("final", answer_text)。"""
         provider, client = llm_client.get_provider()
+        prov = llm_client.active_provider()
         started = time.monotonic()
         try:
-            if provider == "anthropic":
-                out = self._step_anthropic(client, messages)
+            if prov.protocol == "anthropic":
+                out = self._step_anthropic(client, prov.model, messages)
             else:
-                out = self._step_openai(client, messages)
+                out = self._step_openai(client, prov.model, messages)
             ok = True
             return out
         except Exception as exc:  # noqa: BLE001
@@ -300,19 +301,19 @@ class AdvisorAgent:
                 "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "purpose": "advisor_agent_step",
                 "provider": provider,
-                "model": llm_client.ANTHROPIC_MODEL if provider == "anthropic" else llm_client.OPENAI_MODEL,
+                "model": prov.model,
                 "latency_ms": round((time.monotonic() - started) * 1000),
                 "ok": ok,
                 "note": "",
             })
 
-    def _step_openai(self, client, messages) -> tuple[str, object]:
+    def _step_openai(self, client, model, messages) -> tuple[str, object]:
         tools = [{"type": "function",
                   "function": {"name": t["name"], "description": t["description"],
                                "parameters": t["parameters"]}}
                  for t in TOOL_SPECS]
         resp = client.chat.completions.create(
-            model=llm_client.OPENAI_MODEL, max_tokens=900, temperature=0,
+            model=model, max_tokens=900, temperature=0,
             messages=messages, tools=tools, tool_choice="auto",
         )
         msg = resp.choices[0].message
@@ -327,14 +328,14 @@ class AdvisorAgent:
         messages.append({"role": "tool", "tool_call_id": call_id,
                          "content": json.dumps(result, ensure_ascii=False)[:MAX_RESULT_CHARS]})
 
-    def _step_anthropic(self, client, messages) -> tuple[str, object]:
+    def _step_anthropic(self, client, model, messages) -> tuple[str, object]:
         tools = [{"name": t["name"], "description": t["description"],
                   "input_schema": t["parameters"]}
                  for t in TOOL_SPECS]
         system = next((m["content"] for m in messages if m["role"] == "system"), "")
         convo = [m for m in messages if m["role"] != "system"]
         resp = client.messages.create(
-            model=llm_client.ANTHROPIC_MODEL, max_tokens=900,
+            model=model, max_tokens=900,
             system=system, messages=convo, tools=tools,
         )
         if resp.stop_reason == "tool_use":
@@ -361,6 +362,7 @@ class AdvisorAgent:
         provider, _ = llm_client.get_provider()
         if provider is None:
             return {"available": False}
+        protocol = llm_client.active_provider().protocol
 
         segment_ids = list(self.bundle.network)
         station_ids = sorted({r.bs_id for r in self.bundle.crowd})
@@ -387,7 +389,7 @@ class AdvisorAgent:
                 result = self._execute_tool(name, args)
                 trace.append({"tool": name, "args": args,
                               "summary": self._summarize(name, result)})
-                if provider == "anthropic":
+                if protocol == "anthropic":
                     self._append_tool_result_anthropic(messages, call_id, result)
                 else:
                     self._append_tool_result_openai(messages, call_id, result)

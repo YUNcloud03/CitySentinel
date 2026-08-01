@@ -13,7 +13,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
-CHANNELS = ("CMS", "Mobile_App", "SMS")
+CHANNELS = ("CMS", "SMS")
+
+# 直達民眾手機的通道。CMS 是路側可變資訊看板，屬現場駕駛可見、非手機推播，
+# 故不列入——民眾端手機是否跳出警報，只由這些通道的送達結果決定。
+CITIZEN_CHANNELS = ("SMS",)
 
 # 合法狀態轉移表
 _TRANSITIONS = {
@@ -55,24 +59,61 @@ class NotificationCenter:
 
     # ---- 建立（Coordinator 於 CONTENT_GENERATED 時呼叫） ----
 
+    # 尚未進入發送流程的狀態——此時重新注入同一事件應覆寫草稿而非新增一則
+    _REPLACEABLE = ("READY_FOR_APPROVAL",)
+
+    def _existing_draft(self, incident_id: str) -> dict | None:
+        """同一事件尚未核准的通報草稿（若有）。"""
+        for noti in self._store.values():
+            if noti["incident_id"] == incident_id and noti["status"] in self._REPLACEABLE:
+                return noti
+        return None
+
     def create_from_incident(self, incident_state: dict) -> dict:
-        self._seq += 1
+        """建立通報草稿。
+
+        同一事件若已有「待核准」的草稿，就地更新內容而不另開一則——
+        重複注入事件（Demo 誤點兩次）不該讓民眾收到兩則相同推播。
+        已核准或已發送的通報則不動，另建新通報以保留稽核軌跡。
+        """
         noti = incident_state.get("notifications", {})
+        existing = self._existing_draft(incident_state["incident_id"])
+        if existing is not None:
+            existing.update({
+                "languages": list((noti.get("messages") or {}).keys()) or ["zh"],
+                "cms": noti.get("cms"),
+                "messages": noti.get("messages", {}),
+                "multilingual_required": noti.get("multilingual_required", False),
+                "multilingual_decision": noti.get("multilingual_decision"),
+                "generated_by": {
+                    "cms": (noti.get("cms_meta") or {}).get("source"),
+                    "messages": (noti.get("messages_meta") or {}).get("source"),
+                },
+            })
+            existing["history"].append(
+                {"status": "DRAFTED", "at": _now(), "note": "事件重新注入，草稿內容已更新"}
+            )
+            return existing
+
+        self._seq += 1
         notification = {
             "notification_id": f"NOTI-{datetime.now():%Y%m%d}-{self._seq:03d}",
             "incident_id": incident_state["incident_id"],
             "channels": list(CHANNELS),
             "target_area": "信義計畫區",
-            "languages": list((noti.get("messages") or {}).keys()) or ["zh", "en"],
+            # SOP 6 未觸發時僅中文，故保底為 ["zh"]
+            "languages": list((noti.get("messages") or {}).keys()) or ["zh"],
             "cms": noti.get("cms"),
             "messages": noti.get("messages", {}),
             "multilingual_required": noti.get("multilingual_required", False),
+            "multilingual_decision": noti.get("multilingual_decision"),
             "generated_by": {
                 "cms": (noti.get("cms_meta") or {}).get("source"),
                 "messages": (noti.get("messages_meta") or {}).get("source"),
             },
             "status": "READY_FOR_APPROVAL",  # 生成即草稿完成，待核准
             "deliveries": None,
+            "citizen_reached": [],  # 尚未發送，民眾端必定為空
             "created_at": _now(),
             "history": [
                 {"status": "DRAFTED", "at": _now(), "note": "內容由系統生成"},
@@ -133,6 +174,7 @@ class NotificationCenter:
         for ch in channels:
             results[ch] = self.adapter.send(noti["notification_id"], ch)
         noti["deliveries"] = [results[ch] for ch in noti["channels"] if ch in results]
+        self._recompute_reach(noti)
         if all(d["status"] == "DELIVERY_CONFIRMED" for d in noti["deliveries"]):
             noti["status"] = "DELIVERY_CONFIRMED"
             note = "全通道送達確認"
@@ -140,5 +182,20 @@ class NotificationCenter:
             noti["status"] = "DELIVERY_FAILED"
             failed = [d["channel"] for d in noti["deliveries"] if d["status"] == "DELIVERY_FAILED"]
             note = f"通道失敗：{failed}，可重試"
+            if not noti["citizen_reached"]:
+                note += "；民眾端未收到警報"
         noti["history"].append({"status": noti["status"], "at": _now(), "note": note})
         return noti
+
+    def _recompute_reach(self, noti: dict) -> None:
+        """標記民眾實際收得到的通道。
+
+        整體 status 是給指揮中心看的營運狀態（任一通道失敗即 DELIVERY_FAILED），
+        不能拿來判斷民眾是否收到——CMS 失敗不影響手機、簡訊失敗也不影響 App。
+        民眾端只該依這裡算出的 citizen_reached 決定是否顯示警報。
+        """
+        reached = [
+            d["channel"] for d in (noti["deliveries"] or [])
+            if d["channel"] in CITIZEN_CHANNELS and d["status"] == "DELIVERY_CONFIRMED"
+        ]
+        noti["citizen_reached"] = reached

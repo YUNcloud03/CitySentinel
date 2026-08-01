@@ -2,6 +2,7 @@
 fastapi>=0.111
 uvicorn[standard]>=0.29
 pydantic>=2.0
+python-dotenv>=1.0   # 載入根目錄 .env（uvicorn[standard] 有帶，明列以免相依變動時失效）
 
 # --- 測試 ---
 pytest>=7.4

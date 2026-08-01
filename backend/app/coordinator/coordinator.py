@@ -580,9 +580,59 @@ class Coordinator:
         msgs = content.pop("_full_messages")
         result = content
 
-        # SOP 6：任一基地台漫遊率 >= 30% 時必做多語；否則仍附 zh/en
+        # SOP 6：任一基地台漫遊率 >= 30% 才須多語；未觸發僅產出中文
         roaming_triggers = [t for t in crowd_triggers if t["rule_id"] == 6]
         result["multilingual_required"] = bool(roaming_triggers)
         result["roaming_evidence"] = [t["evidence"] for t in roaming_triggers]
-        result["messages"] = msgs if roaming_triggers else {k: msgs[k] for k in ("zh", "en")}
+        result["multilingual_decision"] = self._multilingual_decision(at, roaming_triggers)
+        result["messages"] = msgs if roaming_triggers else {"zh": msgs["zh"]}
         return result
+
+    def _multilingual_decision(self, at: datetime, roaming_triggers: list[dict]) -> dict:
+        """SOP 6 觸發判定說明（供 UI 與評審檢視「本次是否觸發、為什麼」）。
+
+        未觸發時 crowd_triggers 不含任何項目，最高漫遊率須自行由該時間切面取得，
+        才能說明「最高 12% < 30%」而不是只回一個 false。
+        """
+        threshold = rule_engine.ROAMING_THRESHOLD_PCT
+        if roaming_triggers:
+            top = max(roaming_triggers, key=lambda t: t["evidence"]["roaming_user_pct"])
+            ev = top["evidence"]
+            pct = ev["roaming_user_pct"]
+            return {
+                "triggered": True,
+                "threshold_pct": threshold,
+                "max_roaming_pct": pct,
+                "bs_id": top["entity_id"],
+                "location_name": ev.get("location_name"),
+                "triggered_count": len(roaming_triggers),
+                "reason": (
+                    f"{ev.get('location_name') or top['entity_id']} 漫遊率 {pct:g}% "
+                    f"≥ {threshold:g}%，觸發 SOP 第 6 條，須產出多國語言"
+                ),
+            }
+
+        snap = self.bundle.crowd_at(at)
+        top_rec = max(snap.values(), key=lambda r: r.roaming_user_pct, default=None)
+        if top_rec is None:
+            return {
+                "triggered": False,
+                "threshold_pct": threshold,
+                "max_roaming_pct": None,
+                "bs_id": None,
+                "location_name": None,
+                "triggered_count": 0,
+                "reason": "無基地台資料可判定，未觸發 SOP 第 6 條，僅產出中文",
+            }
+        return {
+            "triggered": False,
+            "threshold_pct": threshold,
+            "max_roaming_pct": top_rec.roaming_user_pct,
+            "bs_id": top_rec.bs_id,
+            "location_name": top_rec.location_name,
+            "triggered_count": 0,
+            "reason": (
+                f"最高漫遊率 {top_rec.roaming_user_pct:g}%（{top_rec.location_name}）"
+                f"< {threshold:g}%，未觸發 SOP 第 6 條，僅產出中文"
+            ),
+        }

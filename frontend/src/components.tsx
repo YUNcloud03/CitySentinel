@@ -612,6 +612,14 @@ export function IncidentDetail({ incident, onRefresh }: { incident: IncidentStat
               ⚠ {noti.cms_meta?.guardrail_rejected ?? noti.messages_meta?.guardrail_rejected}
             </div>
           )}
+          {noti.multilingual_decision && (
+            <div className="small dim">
+              <span className={`chip ${noti.multilingual_decision.triggered ? "purple" : ""}`}>
+                SOP 6 {noti.multilingual_decision.triggered ? "已觸發" : "未觸發"}
+              </span>
+              {noti.multilingual_decision.reason}
+            </div>
+          )}
           {noti.cms && <div className="cms">CMS：{noti.cms}</div>}
           {noti.messages &&
             Object.entries(noti.messages as Record<string, string>).map(([lang, msg]) => (

@@ -343,6 +343,11 @@ const PWS_TITLE: Record<string, string> = {
   ja: "緊急速報：交通避難指示", ko: "긴급재난문자: 교통 대피 안내",
 };
 
+// 民眾端通道標示——民眾端只收細胞廣播簡訊，CMS 為路側看板不進手機。
+const CHANNEL_LABEL: Record<string, string> = {
+  SMS: "細胞廣播簡訊",
+};
+
 function resolveLang(setting: string): string {
   if (setting !== "auto") return setting;
   const nav = navigator.language.toLowerCase();
@@ -355,17 +360,21 @@ function resolveLang(setting: string): string {
 export function CitizenView() {
   const [langSetting, setLangSetting] = useState("auto");
   const [area, setArea] = useState("信義計畫區");
-  const [delivered, setDelivered] = useState<any[]>([]);
+  const [received, setReceived] = useState<any[]>([]);
   const [acked, setAcked] = useState<Set<string>>(new Set());
+  // 已在此手機清除的通報 id。僅影響本機顯示——後端通報與送達紀錄不受影響，
+  // 如同真實手機刪訊息不會刪掉電信商的發送紀錄。
+  const [cleared, setCleared] = useState<Set<string>>(new Set());
   const lang = resolveLang(langSetting);
 
   useEffect(() => {
     const poll = async () => {
       try {
         const all = await api.notifications();
-        setDelivered(all.filter((n: any) =>
-          n.target_area === area &&
-          n.deliveries?.some((d: any) => d.channel === "Mobile_App" && d.status === "DELIVERY_CONFIRMED")
+        // 由後端判定民眾實際收得到的通道——整體 status 是給指揮中心看的，
+        // 不代表民眾收不到（CMS 失敗不影響手機）。
+        setReceived(all.filter((n: any) =>
+          n.target_area === area && (n.citizen_reached?.length ?? 0) > 0
         ));
       } catch { /* ignore */ }
     };
@@ -374,9 +383,15 @@ export function CitizenView() {
     return () => clearInterval(t);
   }, [area]);
 
+  const delivered = received.filter((n) => !cleared.has(n.notification_id));
   const pickText = (n: any) =>
     n.messages?.[lang] ?? n.messages?.en ?? n.messages?.zh ?? n.cms ?? "";
   const active = delivered.find((n) => !acked.has(n.notification_id));
+
+  const clearPhone = () => {
+    setCleared(new Set(received.map((n) => n.notification_id)));
+    setAcked(new Set());
+  };
 
   return (
     <main className="citizen-view">
@@ -395,11 +410,25 @@ export function CitizenView() {
         </label>
         <p className="dim small">
           警報依通報的目標區域推送——不在疏散範圍內的手機不會收到。
-          App 推播可依裝置語言自動顯示對應語言（細胞廣播則為固定多語並列）；
-          此模擬採裝置語言自動比對，亦可手動切換。
+          民眾端走細胞廣播簡訊；CMS 為路側可變資訊看板，屬現場駕駛可見、不進手機。
+          實際細胞廣播為固定多語並列，此模擬為便於檢視各語版本而提供語言切換。
         </p>
         <p className="dim small">
           （指揮中心「核准 → 發布」通報後，此手機即收到警報）
+        </p>
+        <div className="citizen-actions">
+          <button onClick={clearPhone} disabled={delivered.length === 0}>
+            清空手機通知（{delivered.length}）
+          </button>
+          {cleared.size > 0 && (
+            <button className="link-btn" onClick={() => { setCleared(new Set()); setAcked(new Set()); }}>
+              復原（已清除 {cleared.size} 則）
+            </button>
+          )}
+        </div>
+        <p className="dim small">
+          清空只影響這支模擬手機的顯示，不會刪除後端通報或送達紀錄——
+          方便重複測試新事件的推播。
         </p>
       </div>
 
@@ -414,7 +443,10 @@ export function CitizenView() {
             <div className="pws-alert">
               <div className="pws-header">⚠️ {PWS_TITLE[lang] ?? PWS_TITLE.zh}</div>
               <div className="pws-body">{pickText(active)}</div>
-              <div className="pws-meta dim">{active.notification_id}｜{active.target_area}</div>
+              <div className="pws-meta dim">
+                {active.notification_id}｜{active.target_area}
+                ｜{(active.citizen_reached ?? []).map((c: string) => CHANNEL_LABEL[c] ?? c).join("、")}
+              </div>
               <button className="pws-ack"
                 onClick={() => setAcked((s) => new Set(s).add(active.notification_id))}>
                 {lang === "en" ? "OK" : lang === "ja" ? "確認" : lang === "ko" ? "확인" : "我知道了"}

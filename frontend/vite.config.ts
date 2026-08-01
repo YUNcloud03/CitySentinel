@@ -6,6 +6,7 @@ export default defineConfig({
   server: {
     port: Number(process.env.PORT) || 5173,
     strictPort: false,
-    proxy: { "/api": "http://localhost:8000" },
+    // 後端埠可用 API_PORT 覆寫（8000 被佔用時免改設定檔）
+    proxy: { "/api": `http://localhost:${process.env.API_PORT || 8000}` },
   },
 });

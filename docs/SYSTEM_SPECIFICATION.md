@@ -630,7 +630,9 @@ stateDiagram-v2
     end note
 ```
 
-通道：`CMS`、`Mobile_App`、`SMS`。Demo 使用模擬 Adapter，SMS 首次發送必失敗以展示重試閉環。
+通道：`CMS`（路側可變資訊看板）、`SMS`（細胞廣播簡訊）。Demo 使用模擬 Adapter，SMS 首次發送必失敗以展示重試閉環。
+
+其中僅 `SMS` 直達民眾手機（`CITIZEN_CHANNELS`）。通報的整體 `status` 是給指揮中心看的營運狀態——任一通道失敗即 `DELIVERY_FAILED`；民眾端是否顯示警報則另由 `citizen_reached` 判定，避免「CMS 失敗」被誤讀為「民眾沒收到」，或反之。
 
 ### 8.6 資源調度與優先權抽調
 
@@ -665,7 +667,7 @@ flowchart LR
     C --> D["4 方案生成<br/>路徑+ETE+資源"]
     D --> E["5 人工核准<br/>接受/調整/拒絕"]
     E --> F["6 通報發布<br/>四語+送達追蹤"]
-    F --> G["7 民眾接收<br/>依裝置語言"]
+    F --> G["7 民眾接收<br/>簡訊送達後顯示"]
     E -.->|資源缺口| H["抽調建議<br/>需再次核准"]
     H --> E
     G --> I["8 紀錄驗證<br/>稽核查詢"]
