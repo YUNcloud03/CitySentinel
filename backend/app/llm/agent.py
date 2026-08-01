@@ -288,10 +288,13 @@ class AdvisorAgent:
         prov = llm_client.active_provider()
         started = time.monotonic()
         try:
+            # agent 路徑不經過 structured_completion，故限流／退避需在此另行掛上。
             if prov.protocol == "anthropic":
-                out = self._step_anthropic(client, prov.model, messages)
+                out = llm_client.call_with_retry(
+                    lambda: self._step_anthropic(client, prov.model, messages))
             else:
-                out = self._step_openai(client, prov.model, messages)
+                out = llm_client.call_with_retry(
+                    lambda: self._step_openai(client, prov.model, messages))
             ok = True
             return out
         except Exception as exc:  # noqa: BLE001
