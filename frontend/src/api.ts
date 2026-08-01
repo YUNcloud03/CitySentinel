@@ -57,9 +57,15 @@ export interface IncidentState {
   decision_trace: { step: string; at: string; detail: any }[];
   coordinator_summary?: {
     verdict: string;
+    situation?: string;
+    impact?: string;
     actions: string[];
+    recommendation?: string;
+    tradeoffs?: string;
+    expected_improvement?: string;
     escalation: string;
     basis: string;
+    evidence_contract?: Record<string, any>;
   };
   confidence?: {
     confidence_score: number;
@@ -121,6 +127,56 @@ export interface DecisionResult {
   verdict: string;
   model: string;
   production_state_modified: boolean;
+  signal_plan?: {
+    cycle_seconds: number; formula: string; model: string;
+    approaches: { segment_id: string; name: string; demand_score: number; next_green_seconds: number;
+      safety_minimum_green_seconds: number; wait_time_source: string }[];
+  } | null;
+  evidence_contract?: Record<string, any>;
+}
+
+export interface GreenCorridorResult {
+  scenario_id: string;
+  as_of: string;
+  vehicle_type: "Ambulance" | "FireEngine";
+  priority: "EMERGENCY";
+  route_segment_ids: string[];
+  route_names: string[];
+  route_details: {
+    segment_id: string; name: string; length_m: number; signal_count: number;
+    baseline_speed_kmh: number; corridor_speed_kmh: number; saturation_score: number;
+    baseline_minutes: number; corridor_minutes: number; source: string; data_time: string | null;
+  }[];
+  blocked_segment_ids: string[];
+  eta: {
+    before_minutes: number; after_minutes: number; saved_minutes: number;
+    improvement_pct: number; formula: string;
+  };
+  signal_actions: {
+    intersection_id: string; device_id: string; name: string; segment_id: string; coordinates: [number, number];
+    action: "EMERGENCY_GREEN"; prepare_at_seconds: number; activate_at_seconds: number;
+    passage_at_seconds: number; restore_at_seconds: number;
+    pedestrian_clearance_seconds: number; reason: string;
+  }[];
+  dispatch_recommendation: {
+    resource_type: string; requested_units: number; critical_segment_ids: string[]; reason: string;
+  };
+  messages: Record<"zh" | "en" | "ja" | "ko", string>;
+  evidence: Record<string, any>;
+  decision_trace: { step: string; detail: any }[];
+  model: string;
+  approval_status: "READY_FOR_APPROVAL" | "APPROVED_FOR_SIMULATION";
+  approved_by?: string;
+  approved_at?: string;
+  runtime_state: {
+    elapsed_seconds: number; total_seconds: number; completed: boolean;
+    current_intersection_id: string | null;
+    active_signal_device_ids: string[]; clearance_signal_device_ids: string[];
+    intersection_states: { intersection_id: string; name: string; state: string; device_ids: string[];
+      prepare_at_seconds: number; activate_at_seconds: number; passage_at_seconds: number; restore_at_seconds: number }[];
+  };
+  production_state_modified: false;
+  limitations: string;
 }
 
 export const api = {
@@ -138,6 +194,14 @@ export const api = {
     name: string; at: string; focus_segment_id: string; actions: DecisionAction[];
     disruption?: string; disruption_segment_id?: string; disruption_load?: number;
   }) => post<DecisionResult>("/api/decision-sandbox", payload),
+  greenCorridor: (payload: {
+    at: string; origin_segment_id: string; destination_segment_id: string;
+    vehicle_type: "Ambulance" | "FireEngine"; blocked_segment_ids: string[];
+  }) => post<GreenCorridorResult>("/api/green-corridor/simulate", payload),
+  approveGreenCorridor: (scenarioId: string, approvedBy = "指揮官") =>
+    post<GreenCorridorResult>(`/api/green-corridor/${scenarioId}/approve`, { approved_by: approvedBy }),
+  greenCorridorState: (scenarioId: string, elapsedSeconds: number) =>
+    get<GreenCorridorResult["runtime_state"]>(`/api/green-corridor/${scenarioId}/state?elapsed_seconds=${elapsedSeconds}`),
   roadNetwork: () => get<any[]>("/api/road-network"),
   sop: () => get<{ rule_id: number; title: string; text: string }[]>("/api/sop"),
   resources: () => get<Resource[]>("/api/resources"),

@@ -93,6 +93,7 @@ body {
   border-radius: 50%; background: var(--red);
 }
 .tab-dot.blue { background: var(--cyan); }
+.tab-dot.green { background: #00f5a0; }
 .rd-body { flex: 1; overflow-y: auto; padding: 12px; min-height: 0; }
 .rd-body .panel { border: none; padding: 0; background: transparent; animation: none; }
 
@@ -348,6 +349,7 @@ td { padding: 3px 4px; border-top: 1px solid var(--border); font-size: 12px; }
   border-radius: var(--r-chip); padding: 6px 10px; font-size: 11px;
 }
 .map-legend .sw { display: inline-block; width: 16px; height: 4px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
+.map-legend .sw.corridor { background: #00f5a0; box-shadow: 0 0 8px rgba(0,245,160,.75); }
 .map-legend .note { color: var(--dim); }
 .asset-layer-control {
   position: absolute; left: 50%; bottom: 46px; transform: translateX(-50%); z-index: 7;
@@ -399,6 +401,17 @@ td { padding: 3px 4px; border-top: 1px solid var(--border); font-size: 12px; }
 .traffic-signal-marker.phase-red .lamp.red,
 .traffic-signal-marker.phase-yellow .lamp.yellow,
 .traffic-signal-marker.phase-green .lamp.green { opacity: 1; box-shadow: 0 0 8px currentColor; }
+.traffic-signal-marker.corridor-preempt {
+  filter: drop-shadow(0 0 9px rgba(0,245,160,.95));
+}
+.traffic-signal-marker.corridor-preempt .signal-housing { border-color: #00f5a0; }
+.traffic-signal-marker.corridor-preempt .signal-countdown {
+  min-width: 34px; border-color: #00f5a0; background: rgba(0,38,27,.94); color: #7dffd0;
+}
+.traffic-signal-marker.corridor-proposed .signal-housing { border-color: var(--amber); }
+.traffic-signal-marker.corridor-proposed .signal-countdown {
+  min-width: 34px; border-color: var(--amber); background: rgba(35,24,3,.94); color: #ffd17a;
+}
 .signal-countdown {
   min-width: 31px; margin-bottom: 4px; padding: 2px 4px; border: 1px solid rgba(47,191,113,.7);
   border-radius: 4px; background: rgba(6,18,13,.92); color: #57e58d; font: 700 10px/1.2 Consolas, monospace;
@@ -421,6 +434,81 @@ td { padding: 3px 4px; border-top: 1px solid var(--border); font-size: 12px; }
   padding: 6px 11px; color: #d7f5e3; font-size: 11px; pointer-events: none;
 }
 .map-sim-badge span { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+.map-corridor-badge {
+  position: absolute; left: 12px; top: 48px; z-index: 6; display: flex; align-items: center; gap: 7px;
+  background: rgba(5, 27, 21, .94); border: 1px solid #00f5a0; border-radius: var(--r-pill);
+  padding: 7px 12px; color: #b6ffe3; font-size: 11px; pointer-events: none;
+  box-shadow: 0 0 22px rgba(0,245,160,.18);
+}
+.map-corridor-badge.pending { border-color: var(--amber); color: #ffe1a3; background: rgba(34,23,3,.94); }
+.map-corridor-badge.pending span { background: var(--amber); box-shadow: 0 0 0 5px rgba(245,166,35,.12); }
+.map-corridor-badge span {
+  width: 8px; height: 8px; border-radius: 50%; background: #00f5a0;
+  box-shadow: 0 0 0 5px rgba(0,245,160,.12);
+}
+
+/* 綠色救援走廊 */
+.green-corridor-panel { display: flex; flex-direction: column; gap: 10px; }
+.gc-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.gc-head h3 { color: #fff; margin-top: 2px; }
+.gc-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.gc-fields label { display: flex; flex-direction: column; gap: 4px; color: var(--dim); font-size: 10.5px; }
+.gc-fields select {
+  width: 100%; min-width: 0; padding: 7px; border-radius: var(--r-input);
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+}
+.gc-run { width: 100%; padding: 9px 12px; }
+.gc-result { display: flex; flex-direction: column; gap: 10px; animation: slide-up .25s ease-out; }
+.gc-status {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid rgba(0,245,160,.36);
+  border-radius: var(--r-chip); background: rgba(0,245,160,.07); color: #a9ffda; font-size: 11px;
+}
+.gc-status i { width: 7px; height: 7px; border-radius: 50%; background: #00f5a0; box-shadow: 0 0 8px #00f5a0; }
+.gc-status:not(.approved) { border-color: rgba(245,166,35,.38); background: rgba(245,166,35,.07); color: #ffe0a1; }
+.gc-status:not(.approved) i { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+.gc-eta {
+  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; position: relative;
+  padding: 12px 10px 28px; border: 1px solid var(--border); border-radius: var(--r-chip); background: var(--panel-2);
+}
+.gc-eta > div:not(.gc-arrow):not(.gc-save) { display: grid; grid-template-columns: auto auto; align-items: baseline; column-gap: 4px; }
+.gc-eta span { grid-column: 1 / -1; color: var(--dim); font-size: 10px; }
+.gc-eta b { color: var(--fog); font-size: 28px; line-height: 1; }
+.gc-eta small { color: var(--dim); }
+.gc-eta .improved b { color: #00f5a0; }
+.gc-arrow { color: var(--slate); font-size: 20px; }
+.gc-save { position: absolute; left: 10px; bottom: 8px; color: #76e8b9; font-size: 10px; }
+.gc-kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
+.gc-kpis span { padding: 7px 4px; border-radius: 7px; background: var(--panel-2); text-align: center; color: var(--dim); font-size: 9px; }
+.gc-kpis b { display: block; color: #fff; font-size: 15px; }
+.gc-approve {
+  width: 100%; padding: 9px 10px; border-color: #00f5a0; background: rgba(0,245,160,.09); color: #a9ffda;
+}
+.gc-approve:hover { background: #00f5a0; color: #042218; transform: none; }
+.gc-approved-proof {
+  padding: 7px 9px; border-radius: 7px; background: rgba(0,245,160,.06); color: #79dbb2; font-size: 9.5px;
+}
+.gc-route { display: flex; flex-direction: column; }
+.gc-route > div { display: flex; align-items: stretch; min-height: 42px; }
+.gc-route > div > i {
+  position: relative; flex: 0 0 24px; width: 24px; height: 24px; margin-right: 8px; border-radius: 50%;
+  background: rgba(0,245,160,.12); border: 1px solid #00f5a0; color: #8affe0;
+  font: normal 700 10px/22px Consolas, monospace; text-align: center;
+}
+.gc-route > div:not(:last-child) > i::after {
+  content: ""; position: absolute; left: 10px; top: 24px; width: 2px; height: 19px; background: rgba(0,245,160,.42);
+}
+.gc-route span { display: flex; flex-direction: column; gap: 2px; }
+.gc-route span b { color: #fff; font-size: 11.5px; }
+.gc-route span small { color: var(--slate); font-size: 9.5px; }
+.gc-message { border: 1px solid var(--border); border-radius: var(--r-chip); overflow: hidden; }
+.gc-lang { display: flex; border-bottom: 1px solid var(--border); }
+.gc-lang button { flex: 1; padding: 5px; border: 0; border-radius: 0; background: var(--panel-2); color: var(--dim); font-size: 9px; }
+.gc-lang button.active { color: #00f5a0; background: rgba(0,245,160,.08); }
+.gc-message p { padding: 8px 10px; color: var(--fog); font-size: 10.5px; line-height: 1.55; }
+.gc-proof { padding: 8px 10px; border-radius: var(--r-chip); background: rgba(255,255,255,.025); color: var(--dim); font-size: 10px; }
+.gc-proof summary { cursor: pointer; color: var(--fog); }
+.gc-proof p { margin-top: 6px; line-height: 1.45; }
+.gc-proof code { display: block; margin-top: 6px; color: #76e8b9; }
 .maplibregl-popup-content {
   background: var(--panel-2); color: var(--text);
   border: 1px solid var(--border); border-radius: 8px; font-size: 12px;
@@ -1019,3 +1107,12 @@ footer { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .md-list li { margin: 2px 0; }
 .md-list:last-child { margin-bottom: 0; }
 .md-list li.md-sub { margin-left: 16px; list-style-type: circle; }
+
+/* ---- 智慧號誌配時佐證與綠色廊道（origin/main） ---- */
+.signal-plan-proof { margin-top: 12px; padding: 12px; border: 1px solid rgba(0,245,160,.25); border-radius: 10px; background: rgba(0,245,160,.05); }
+.signal-plan-proof > b { display: block; margin-bottom: 8px; color: #7fffd4; }
+.signal-plan-proof > div { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,.06); }
+.signal-plan-proof > div small { grid-column: 1 / -1; color: #8f9bad; }
+.signal-plan-proof p { margin: 8px 0 0; color: #8f9bad; font-size: 11px; line-height: 1.5; }
+.gc-runtime { display: grid; gap: 3px; margin: 10px 0; padding: 10px; border-left: 3px solid #00f5a0; background: rgba(0,245,160,.06); }
+.gc-runtime span, .gc-runtime small { color: #9fb0c4; }

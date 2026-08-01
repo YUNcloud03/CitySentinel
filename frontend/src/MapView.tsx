@@ -1,7 +1,7 @@
 ﻿import { useEffect, useRef } from "react";
 import maplibregl from "maplibre-gl";
 import { useState } from "react";
-import type { IncidentState, SimView } from "./api";
+import type { GreenCorridorResult, IncidentState, SimView } from "./api";
 import officialRoadGeometry from "./data/roads.json";
 import {
   INCIDENT_COORDS,
@@ -68,6 +68,7 @@ function roadsGeoJSON(
   incident: IncidentState | null,
   projectedTraffic?: Record<string, any> | null,
   selectedSegmentId?: string | null,
+  greenCorridor?: GreenCorridorResult | null,
 ) {
   const routing = incident?.routing_result;
   const primaryId = routing?.primary_route?.segment_id;
@@ -75,6 +76,8 @@ function roadsGeoJSON(
     (routing?.secondary_routes ?? []).map((s: any) => s.segment_id)
   );
   const closedId = routing?.affected_segment?.segment_id;
+  const corridorIds = new Set(greenCorridor?.route_segment_ids ?? []);
+  const corridorBlockedIds = new Set(greenCorridor?.blocked_segment_ids ?? []);
 
   return {
     type: "FeatureCollection" as const,
@@ -96,6 +99,9 @@ function roadsGeoJSON(
           role,
           selected: segId === selectedSegmentId,
           simulated: Boolean(projectedTraffic?.[segId]),
+          corridor: corridorIds.has(segId),
+          corridor_approved: greenCorridor?.approval_status === "APPROVED_FOR_SIMULATION" && corridorIds.has(segId),
+          corridor_blocked: corridorBlockedIds.has(segId),
         },
         geometry: road.geometry,
       };
@@ -143,12 +149,14 @@ export default function MapView({
   view,
   incident,
   projectedTraffic,
+  greenCorridor,
   selectedSegmentId,
   onSelectSegment,
 }: {
   view: SimView | null;
   incident: IncidentState | null;
   projectedTraffic?: Record<string, any> | null;
+  greenCorridor?: GreenCorridorResult | null;
   selectedSegmentId?: string | null;
   onSelectSegment?: (segmentId: string) => void;
 }) {
@@ -157,7 +165,7 @@ export default function MapView({
   const readyRef = useRef(false);
   const markerRef = useRef<maplibregl.Marker | null>(null);
   const markerIncidentRef = useRef<string | null>(null);
-  const signalMarkersRef = useRef<{ marker: maplibregl.Marker; element: HTMLButtonElement; offset: number }[]>([]);
+  const signalMarkersRef = useRef<{ marker: maplibregl.Marker; element: HTMLButtonElement; offset: number; deviceId: string }[]>([]);
   const selectRef = useRef(onSelectSegment);
   selectRef.current = onSelectSegment;
   const [assetLayers, setAssetLayers] = useState<Record<AssetLayer, boolean>>({
@@ -224,6 +232,40 @@ export default function MapView({
         filter: ["==", ["get", "selected"], true],
         layout: { "line-cap": "round", "line-join": "round" },
         paint: { "line-width": 12, "line-color": "#ffffff", "line-opacity": 0.32 },
+      });
+      map.addLayer({
+        id: "green-corridor-glow",
+        type: "line",
+        source: "roads",
+        filter: ["==", ["get", "corridor"], true],
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          "line-width": 15,
+          "line-color": ["case", ["==", ["get", "corridor_approved"], true], "#00f5a0", "#f5a623"],
+          "line-opacity": 0.18,
+        },
+      });
+      map.addLayer({
+        id: "green-corridor-route",
+        type: "line",
+        source: "roads",
+        filter: ["==", ["get", "corridor_approved"], true],
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: { "line-width": 6, "line-color": "#00f5a0", "line-opacity": 0.98 },
+      });
+      map.addLayer({
+        id: "green-corridor-proposal",
+        type: "line",
+        source: "roads",
+        filter: ["all", ["==", ["get", "corridor"], true], ["==", ["get", "corridor_approved"], false]],
+        paint: { "line-width": 5, "line-color": "#f5a623", "line-opacity": 0.9, "line-dasharray": [2, 1.5] },
+      });
+      map.addLayer({
+        id: "green-corridor-blocked",
+        type: "line",
+        source: "roads",
+        filter: ["==", ["get", "corridor_blocked"], true],
+        paint: { "line-width": 9, "line-color": "#ff3b3f", "line-dasharray": [1, 1] },
       });
       // 顏色平滑過渡（runtime 支援、TS 型別未涵蓋 transition 鍵）
       (map as any).setPaintProperty("roads-base", "line-color-transition", { duration: 700 });
@@ -340,7 +382,7 @@ export default function MapView({
                 `<b>${escapeHtml(name)}</b><br/>設備 ${escapeHtml(deviceId)}｜群組 ${escapeHtml(group) || "—"}<br/>點位：臺北市交通局｜燈相：沙盒模擬${reportLink}<br/>點擊號誌可開啟路段推演`
               ))
               .addTo(map);
-            return { marker, element, offset };
+            return { marker, element, offset, deviceId };
           });
           setSignalCount(features.length);
         })
@@ -417,13 +459,29 @@ export default function MapView({
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    signalMarkersRef.current.forEach(({ element, offset }) => {
+    const plannedSignalIds = new Set(greenCorridor?.signal_actions.map((action) => action.device_id) ?? []);
+    const activeSignalIds = new Set(greenCorridor?.runtime_state?.active_signal_device_ids ?? []);
+    const clearanceSignalIds = new Set(greenCorridor?.runtime_state?.clearance_signal_device_ids ?? []);
+    const corridorApproved = greenCorridor?.approval_status === "APPROVED_FOR_SIMULATION";
+    signalMarkersRef.current.forEach(({ element, offset, deviceId }) => {
       const state = signalPhase(view, offset);
-      element.classList.remove("phase-red", "phase-yellow", "phase-green");
-      element.classList.add(`phase-${state.phase}`);
+      const corridorActive = corridorApproved && activeSignalIds.has(deviceId);
+      const corridorSelected = corridorApproved
+        ? clearanceSignalIds.has(deviceId)
+        : plannedSignalIds.has(deviceId);
+      element.classList.remove("phase-red", "phase-yellow", "phase-green", "corridor-preempt", "corridor-proposed");
+      element.classList.add(corridorActive ? "phase-green" : `phase-${state.phase}`);
+      if (corridorActive) element.classList.add("corridor-preempt");
+      else if (corridorSelected) element.classList.add("corridor-proposed");
       const countdown = element.querySelector<HTMLElement>(".signal-countdown");
-      if (countdown) countdown.textContent = `${state.remaining}s`;
-      element.title = `官方號誌點位；模擬${state.label}，剩餘 ${state.remaining} 秒`;
+      if (countdown) countdown.textContent = corridorActive ? "優先" : corridorSelected
+        ? corridorApproved ? "清空" : "待核"
+        : `${state.remaining}s`;
+      element.title = corridorActive
+        ? "官方號誌點位；已核准啟動救援走廊模擬優先綠燈"
+        : corridorSelected
+          ? "官方號誌點位；救援走廊優先綠燈提案（待核准）"
+          : `官方號誌點位；模擬${state.label}，剩餘 ${state.remaining} 秒`;
     });
     // 事件擴散 pulse marker（DOM overlay，不需等 style load）
     const coord = incident ? INCIDENT_COORDS[incident.incident_id] : null;
@@ -442,7 +500,7 @@ export default function MapView({
     }
     if (!readyRef.current) return;
     (map.getSource("roads") as maplibregl.GeoJSONSource)?.setData(
-      roadsGeoJSON(view, incident, projectedTraffic, selectedSegmentId)
+      roadsGeoJSON(view, incident, projectedTraffic, selectedSegmentId, greenCorridor)
     );
     (map.getSource("stations") as maplibregl.GeoJSONSource)?.setData(
       stationsGeoJSON(view)
@@ -450,7 +508,7 @@ export default function MapView({
     (map.getSource("incident") as maplibregl.GeoJSONSource)?.setData(
       incidentGeoJSON(incident)
     );
-  }, [view, incident, projectedTraffic, selectedSegmentId, signalCount]);
+  }, [view, incident, projectedTraffic, greenCorridor, selectedSegmentId, signalCount]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -474,6 +532,12 @@ export default function MapView({
       {projectedTraffic && (
         <div className="map-sim-badge"><span />方案推演結果｜非正式狀態</div>
       )}
+      {greenCorridor && (
+        <div className={`map-corridor-badge ${greenCorridor.approval_status === "APPROVED_FOR_SIMULATION" ? "approved" : "pending"}`}>
+          <span />綠色救援走廊｜{greenCorridor.eta.before_minutes} → {greenCorridor.eta.after_minutes} 分｜
+          {greenCorridor.approval_status === "APPROVED_FOR_SIMULATION" ? "模擬啟動" : "待核准"}
+        </div>
+      )}
       <div className="asset-layer-control" role="group" aria-label="交通設施圖層">
         <button className={assetLayers.crosswalks ? "active" : ""} aria-pressed={assetLayers.crosswalks}
           onClick={() => toggleAssetLayer("crosswalks")}>
@@ -495,6 +559,7 @@ export default function MapView({
         <span><i className="sw" style={{ background: "#007afc" }} /> 主疏散</span>
         <span><i className="sw dashed" style={{ background: "#d5dae2" }} /> 次要疏散</span>
         <span><i className="sw" style={{ background: "#8c2f33" }} /> 封閉</span>
+        <span><i className="sw corridor" /> 救援綠廊</span>
         <span className="note">號誌點位、行穿線、CMS 為官方圖資；道路情境與號誌燈相為模擬</span>
       </div>
     </div>

@@ -86,7 +86,9 @@ def test_agent_loop_tool_then_final(agent, monkeypatch):
         result = scripted.run("BL17 爆量怎麼辦？")
         assert result["available"] is True
         assert result["tool_trace"][0]["tool"] == "get_sop"
+        assert len(result["tool_trace"][0]["result_sha256"]) == 64
         assert result["cited_rule_ids"] == [3]  # 軌跡 + 文字交叉推導
+        assert result["evidence_contract"]["validation_status"] == "VERIFIED_TOOL_GROUNDED"
     finally:
         llm_client.reset_provider_cache()
 
@@ -109,3 +111,18 @@ def test_agent_max_iterations_enforced(agent, monkeypatch):
 def test_agent_unavailable_when_llm_disabled(agent):
     result = agent.run("任何問題")  # conftest 已設 CITY_LLM_DISABLED
     assert result == {"available": False}
+
+
+def test_agent_rejects_factual_final_without_tool_evidence(agent, monkeypatch):
+    monkeypatch.delenv("CITY_LLM_DISABLED", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "fake")
+    from app.llm import client as llm_client
+    llm_client.reset_provider_cache()
+    try:
+        scripted = _make_scripted_agent(agent, [("final", "SOP 7 要派 99 台車走虛構道路")])
+        result = scripted.run("現在該怎麼辦？")
+        assert "尚未取得可驗證工具證據" in result["answer"]
+        assert result["cited_rule_ids"] == []
+        assert result["evidence_contract"]["validation_status"] == "REJECTED_NO_EVIDENCE"
+    finally:
+        llm_client.reset_provider_cache()

@@ -38,9 +38,10 @@ def test_custom_event_lower_base():
         {"RD_TPE_002": _traffic(speed=40, sat=0.5, lane="Normal")}, {},
         {"RD_TPE_002": _seg()},
     )
-    # 只有 0.3 自訂來源，無交叉驗證訊號
-    assert result["confidence_score"] == 0.3
-    assert result["level"] == "低"
+    # 舊版自訂事件視為已由操作員注入：來源 0.3 + 人工確認 0.2。
+    assert result["confidence_score"] == 0.5
+    assert result["level"] == "中"
+    assert result["execution_policy"]["code"] == "ACTION_PROPOSED"
 
 
 def test_no_traffic_data_noted_in_evidence():

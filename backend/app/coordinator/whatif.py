@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import replace
 from datetime import datetime
 
@@ -35,6 +37,13 @@ def run_what_if(bundle: DataBundle, scenario: dict) -> dict:
     # 基準狀態
     base_traffic = bundle.traffic_at(at)
     base_crowd = bundle.crowd_at(at)
+    unknown_traffic = set(scenario.get("traffic_overrides") or {}) - set(bundle.network)
+    known_stations = {record.bs_id for record in bundle.crowd}
+    unknown_crowd = set(scenario.get("crowd_overrides") or {}) - known_stations
+    if unknown_traffic or unknown_crowd:
+        raise KeyError(
+            f"What-if 含未知 ID：{', '.join(sorted(unknown_traffic | unknown_crowd))}"
+        )
     baseline_triggers = (
         rule_engine.evaluate_crowd(base_crowd, bundle.crowd, at)
         + rule_engine.evaluate_traffic(base_traffic)["triggers"]
@@ -87,4 +96,19 @@ def run_what_if(bundle: DataBundle, scenario: dict) -> dict:
 
     new_rules = set(result["sandbox"]["triggered_rules"]) - set(result["baseline"]["triggered_rules"])
     result["diff"] = {"newly_triggered_rules": sorted(new_rules)}
+    scenario_json = json.dumps(scenario, ensure_ascii=False, sort_keys=True, default=str)
+    baseline_json = json.dumps({
+        "traffic": {key: vars(value) for key, value in sorted(base_traffic.items())},
+        "crowd": {key: vars(value) for key, value in sorted(base_crowd.items())},
+    }, ensure_ascii=False, sort_keys=True, default=str)
+    scenario_hash = hashlib.sha256(scenario_json.encode()).hexdigest()
+    baseline_hash = hashlib.sha256(baseline_json.encode()).hexdigest()
+    result["simulation_run_id"] = f"WHATIF-{scenario_hash[:12]}"
+    result["model"] = "deterministic-whatif-v1"
+    result["evidence_contract"] = {
+        "version": "v1", "baseline_snapshot_sha256": baseline_hash,
+        "scenario_sha256": scenario_hash, "model": result["model"], "randomness_used": False,
+        "metrics": result["diff"],
+        "limitations": "覆寫指定欄位後重新執行規則；不是交通微觀模擬",
+    }
     return result

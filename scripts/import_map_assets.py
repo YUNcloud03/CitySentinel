@@ -45,8 +45,8 @@ def twd97_to_wgs84(x: float, y: float) -> tuple[float, float]:
     return round(math.degrees(lon), 7), round(math.degrees(lat), 7)
 
 
-def read_dbf(path: Path) -> list[dict[str, str]]:
-    raw = path.read_bytes()
+def read_dbf(source: Path | bytes) -> list[dict[str, str]]:
+    raw = source if isinstance(source, bytes) else source.read_bytes()
     row_count = struct.unpack_from("<I", raw, 4)[0]
     header_len, row_len = struct.unpack_from("<HH", raw, 8)
     fields, pos = [], 32

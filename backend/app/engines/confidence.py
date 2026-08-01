@@ -8,8 +8,7 @@
     車道狀態與事件相符    +0.15
     周邊基地台人流異常    +0.10
 
-完全確定性、可重算；分數僅供指揮官參考排序，
-正式處置仍依 SOP Rule Engine（分數不參與任何判定）。
+完全確定性、可重算；分數同時控制資源保留與通知閘門。
 """
 from __future__ import annotations
 
@@ -22,6 +21,39 @@ ABNORMAL_LANE_STATUS = {"Accident_Impact", "Blocked", "Gridlock", "Closed"}
 
 LEVELS = ((0.75, "高"), (0.50, "中"), (0.0, "低"))
 
+SOURCE_PRIORS = {
+    "official": 0.50,
+    "organizer_dataset": 0.50,
+    "operator": 0.30,
+    "iot": 0.30,
+    "camera": 0.30,
+    "citizen": 0.10,
+    "unknown": 0.10,
+}
+
+
+def _source_type(incident: dict) -> tuple[str, bool]:
+    explicit = str(incident.get("source_type") or "").strip().lower()
+    if explicit in SOURCE_PRIORS:
+        return explicit, False
+    # 主辦方事件檔沒有 provenance 欄位；保留舊資料相容性，但明示為推定。
+    if incident.get("event_id", "").startswith("TPE_"):
+        return "organizer_dataset", True
+    return "operator", True
+
+
+def _execution_policy(score: float, source_type: str, human_confirmed: bool) -> dict:
+    trusted_source = source_type in {"official", "organizer_dataset"}
+    authorized_operator = source_type == "operator" and human_confirmed
+    if score >= 0.75 or ((trusted_source or authorized_operator) and score >= 0.50):
+        return {"code": "ACTION_PROPOSED", "resource_reservation_allowed": True,
+                "external_action_requires_human_approval": True}
+    if score >= 0.50:
+        return {"code": "HUMAN_CONFIRMATION_REQUIRED", "resource_reservation_allowed": False,
+                "external_action_requires_human_approval": True}
+    return {"code": "MONITOR_ONLY", "resource_reservation_allowed": False,
+            "external_action_requires_human_approval": True}
+
 
 def assess_confidence(
     incident: dict,
@@ -32,13 +64,16 @@ def assess_confidence(
     score = 0.0
     evidence: list[str] = []
 
-    # 訊號 1：事件來源
-    if incident.get("event_id", "").startswith("TPE_"):
-        score += 0.50
-        evidence.append("官方事件資料（live_incidents.json）")
-    else:
-        score += 0.30
-        evidence.append("自訂注入事件（非官方清單，來源可信度較低）")
+    # 訊號 1：事件來源。來源種類與是否為推定都回傳供稽核。
+    source_type, source_inferred = _source_type(incident)
+    score += SOURCE_PRIORS[source_type]
+    evidence.append(f"事件來源 {source_type}（權重 {SOURCE_PRIORS[source_type]:.2f}）")
+    human_confirmed = bool(
+        incident.get("human_confirmed", source_inferred and source_type == "operator")
+    )
+    if human_confirmed:
+        score += 0.20
+        evidence.append("事件已由值勤人員確認（+0.20）")
 
     # 受影響路段（BS_ 事件用 affected_road）
     seg_id = incident.get("affected_segment", "")
@@ -83,5 +118,12 @@ def assess_confidence(
         "confidence_score": score,
         "level": level,
         "evidence": evidence,
-        "note": "信心分數僅供指揮官參考；正式處置依 SOP Rule Engine，不使用此分數。",
+        "source": {
+            "type": source_type,
+            "source_id": incident.get("source_id"),
+            "inferred": source_inferred,
+            "note": "inferred=true 表示來源由相容規則推定，並非數位簽章或外部查證",
+        },
+        "execution_policy": _execution_policy(score, source_type, human_confirmed),
+        "note": "可信度控制資源保留與通知狀態；所有外部動作仍需人工核准。",
     }

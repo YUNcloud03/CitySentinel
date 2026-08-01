@@ -60,7 +60,7 @@ class NotificationCenter:
     # ---- 建立（Coordinator 於 CONTENT_GENERATED 時呼叫） ----
 
     # 尚未進入發送流程的狀態——此時重新注入同一事件應覆寫草稿而非新增一則
-    _REPLACEABLE = ("READY_FOR_APPROVAL",)
+    _REPLACEABLE = ("READY_FOR_APPROVAL", "PENDING_CONFIRMATION", "MONITOR_ONLY")
 
     def _existing_draft(self, incident_id: str) -> dict | None:
         """同一事件尚未核准的通報草稿（若有）。"""
@@ -77,9 +77,28 @@ class NotificationCenter:
         已核准或已發送的通報則不動，另建新通報以保留稽核軌跡。
         """
         noti = incident_state.get("notifications", {})
+        policy = ((incident_state.get("confidence") or {}).get("execution_policy") or {}).get(
+            "code", "ACTION_PROPOSED"
+        )
+        if policy == "ACTION_PROPOSED":
+            status, channels, history_note = (
+                "READY_FOR_APPROVAL", list(CHANNELS), "等待管理者核准"
+            )
+        elif policy == "HUMAN_CONFIRMATION_REQUIRED":
+            status, channels, history_note = (
+                "PENDING_CONFIRMATION", ["Dashboard"], "可信度不足，需先人工確認；禁止對外發布"
+            )
+        else:
+            status, channels, history_note = (
+                "MONITOR_ONLY", ["Dashboard"], "低可信事件僅供內部監測；禁止對外發布"
+            )
+
         existing = self._existing_draft(incident_state["incident_id"])
         if existing is not None:
+            # 重新注入時可信度可能改變，故連同政策閘門一併更新
+            previous_status = existing["status"]
             existing.update({
+                "channels": channels,
                 "languages": list((noti.get("messages") or {}).keys()) or ["zh"],
                 "cms": noti.get("cms"),
                 "messages": noti.get("messages", {}),
@@ -89,7 +108,14 @@ class NotificationCenter:
                     "cms": (noti.get("cms_meta") or {}).get("source"),
                     "messages": (noti.get("messages_meta") or {}).get("source"),
                 },
+                "status": status,
+                "execution_policy": policy,
             })
+            # 政策閘門若因可信度改變而變動，先留下軌跡；再記錄本次重新注入
+            if previous_status != status:
+                existing["history"].append(
+                    {"status": status, "at": _now(), "note": history_note}
+                )
             existing["history"].append(
                 {"status": "DRAFTED", "at": _now(), "note": "事件重新注入，草稿內容已更新"}
             )
@@ -99,7 +125,7 @@ class NotificationCenter:
         notification = {
             "notification_id": f"NOTI-{datetime.now():%Y%m%d}-{self._seq:03d}",
             "incident_id": incident_state["incident_id"],
-            "channels": list(CHANNELS),
+            "channels": channels,
             "target_area": "信義計畫區",
             # SOP 6 未觸發時僅中文，故保底為 ["zh"]
             "languages": list((noti.get("messages") or {}).keys()) or ["zh"],
@@ -111,14 +137,15 @@ class NotificationCenter:
                 "cms": (noti.get("cms_meta") or {}).get("source"),
                 "messages": (noti.get("messages_meta") or {}).get("source"),
             },
-            "status": "READY_FOR_APPROVAL",  # 生成即草稿完成，待核准
+            "status": status,
             "deliveries": None,
             "citizen_reached": [],  # 尚未發送，民眾端必定為空
             "created_at": _now(),
             "history": [
                 {"status": "DRAFTED", "at": _now(), "note": "內容由系統生成"},
-                {"status": "READY_FOR_APPROVAL", "at": _now(), "note": "等待管理者核准"},
+                {"status": status, "at": _now(), "note": history_note},
             ],
+            "execution_policy": policy,
         }
         self._store[notification["notification_id"]] = notification
         return notification
