@@ -318,21 +318,6 @@ export function AdvisorChatView() {
           {messages.map((m, i) => (
             <div className={`chat-msg ${m.role}`} key={i}>
               <div className="chat-bubble">
-                {m.meta?.tool_trace?.length > 0 && (
-                  // 工具軌跡預設收合——它是佐證而非答案本身，展開後仍可完整查核
-                  <details className="agent-trace">
-                    <summary className="agent-trace-head">
-                      Agent 自主呼叫了 {m.meta.tool_trace.length} 個工具
-                    </summary>
-                    {m.meta.tool_trace.map((t: any, j: number) => (
-                      <div className="agent-tool" key={j}>
-                        <span className="tool-name">🔧 {t.tool}</span>
-                        <span className="tool-args mono">{JSON.stringify(t.args)}</span>
-                        <div className="tool-result dim">→ {t.summary}</div>
-                      </div>
-                    ))}
-                  </details>
-                )}
                 <div className="chat-text"><Markdown text={m.text} /></div>
                 {m.meta?.cited_rule_ids?.length > 0 && (
                   <div className="chat-cites">
@@ -344,13 +329,6 @@ export function AdvisorChatView() {
                     基準觸發 {JSON.stringify(m.meta.whatif_result.baseline.triggered_rules)} →
                     假設後 {JSON.stringify(m.meta.whatif_result.sandbox.triggered_rules)}
                     ｜正式狀態未修改｜解析方式 {m.meta.parsed_by}
-                  </div>
-                )}
-                {m.meta?.provider && (
-                  <div className="dim small">
-                    {m.meta.kind === "agent"
-                      ? `Agent 模式（${m.meta.provider}）｜工具由 LLM 自主選擇，僅唯讀/sandbox`
-                      : `LLM：${m.meta.provider}`}
                   </div>
                 )}
               </div>
