@@ -237,6 +237,52 @@ const CHAT_SUGGESTIONS = [
 
 type ChatMsg = { role: "user" | "advisor"; text: string; meta?: any };
 
+// LLM 回覆帶 Markdown 記號，直接輸出會看到裸露的 ** 與 *。
+// 僅支援粗體與項目符號兩種——以 React 節點組出，不使用 innerHTML，
+// 故 LLM 內容無法注入標記。
+function inline(text: string, key: string) {
+  return text.split(/(\*\*[^*]+\*\*)/g).filter(Boolean).map((part, i) =>
+    part.startsWith("**") && part.endsWith("**") && part.length > 4
+      ? <b key={`${key}-${i}`}>{part.slice(2, -2)}</b>
+      : <span key={`${key}-${i}`}>{part}</span>
+  );
+}
+
+function Markdown({ text }: { text: string }) {
+  const blocks: React.ReactNode[] = [];
+  // 保留縮排層級：LLM 常以縮排表示子項目，攤平會讓從屬關係消失
+  let bullets: { depth: number; text: string }[] = [];
+
+  const flush = () => {
+    if (bullets.length === 0) return;
+    const key = blocks.length;
+    blocks.push(
+      <ul className="md-list" key={`ul-${key}`}>
+        {bullets.map((b, i) => (
+          <li key={i} className={b.depth > 0 ? "md-sub" : undefined}>
+            {inline(b.text, `li-${key}-${i}`)}
+          </li>
+        ))}
+      </ul>
+    );
+    bullets = [];
+  };
+
+  for (const raw of text.split("\n")) {
+    const line = raw.trimEnd();
+    const m = line.match(/^(\s*)[*-]\s+(.*)$/);   // 項目符號：* 或 -
+    if (m) {
+      bullets.push({ depth: m[1].length >= 2 ? 1 : 0, text: m[2] });
+      continue;
+    }
+    flush();
+    if (line.trim() === "") continue;
+    blocks.push(<p key={`p-${blocks.length}`}>{inline(line, `p-${blocks.length}`)}</p>);
+  }
+  flush();
+  return <>{blocks}</>;
+}
+
 export function AdvisorChatView() {
   const [messages, setMessages] = useState<ChatMsg[]>([{
     role: "advisor",
@@ -273,10 +319,11 @@ export function AdvisorChatView() {
             <div className={`chat-msg ${m.role}`} key={i}>
               <div className="chat-bubble">
                 {m.meta?.tool_trace?.length > 0 && (
-                  <div className="agent-trace">
-                    <div className="agent-trace-head">
+                  // 工具軌跡預設收合——它是佐證而非答案本身，展開後仍可完整查核
+                  <details className="agent-trace">
+                    <summary className="agent-trace-head">
                       Agent 自主呼叫了 {m.meta.tool_trace.length} 個工具
-                    </div>
+                    </summary>
                     {m.meta.tool_trace.map((t: any, j: number) => (
                       <div className="agent-tool" key={j}>
                         <span className="tool-name">🔧 {t.tool}</span>
@@ -284,9 +331,9 @@ export function AdvisorChatView() {
                         <div className="tool-result dim">→ {t.summary}</div>
                       </div>
                     ))}
-                  </div>
+                  </details>
                 )}
-                <div className="chat-text">{m.text}</div>
+                <div className="chat-text"><Markdown text={m.text} /></div>
                 {m.meta?.cited_rule_ids?.length > 0 && (
                   <div className="chat-cites">
                     {m.meta.cited_rule_ids.map((r: number) => <RuleBadge key={r} id={r} />)}
