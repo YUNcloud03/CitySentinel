@@ -992,7 +992,9 @@ footer { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 @media print {
   @page { margin: 14mm; }
   body { background: #fff; }
-  header, nav, .tabs, .rec-print, .sim-controls, footer { display: none !important; }
+  header, nav, .tabs, .rec-print, .rec-export, .rec-menu, .sim-controls, footer {
+    display: none !important;
+  }
   .app, .rec-view { display: block; padding: 0; overflow: visible; background: #fff; }
   .panel, .rec-doc {
     max-width: none; border: none; box-shadow: none; background: #fff; color: #000;
@@ -1004,3 +1006,19 @@ footer { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .rec-num { background: #ddd !important; color: #000 !important; }
   .rec-route.primary { background: #f0f0f0 !important; }
 }
+
+/* 建議書匯出選單 */
+.rec-export { position: relative; flex: none; }
+.rec-menu {
+  position: absolute; right: 0; top: calc(100% + 5px); z-index: 30;
+  min-width: 250px; padding: 4px;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+}
+.rec-menu button {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+  width: 100%; padding: 7px 9px; text-align: left;
+  background: none; border: none; border-radius: 5px;
+}
+.rec-menu button:hover { background: rgba(56, 189, 248, 0.12); transform: none; }
+.rec-menu button b { font-size: 12.5px; font-weight: 600; }
