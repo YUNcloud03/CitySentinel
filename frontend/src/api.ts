@@ -97,6 +97,32 @@ export interface Resource {
   status: string;
 }
 
+export interface DecisionAction {
+  type: "extend_green" | "open_lane" | "divert" | "police_control";
+  segment_id: string;
+  target_segment_id?: string;
+  share?: number;
+  strength?: number;
+}
+
+export interface DecisionResult {
+  scenario_name: string;
+  as_of: string;
+  focus_segment_id: string;
+  focus_name: string;
+  baseline_traffic: Record<string, any>;
+  projected_traffic: Record<string, any>;
+  baseline_metrics: Record<string, number>;
+  projected_metrics: Record<string, number>;
+  delta: Record<string, number>;
+  series: { minute: number; focus_saturation: number; network_saturation: number }[];
+  applied_actions: any[];
+  disruption: string;
+  verdict: string;
+  model: string;
+  production_state_modified: boolean;
+}
+
 export const api = {
   simStart: (speed: number, start?: string) =>
     post<SimView>("/api/simulation/start", { speed, start_timestamp: start ?? null }),
@@ -108,6 +134,11 @@ export const api = {
   inject: (event_id: string) => post<IncidentState>("/api/incidents/inject", { event_id }),
   incidents: () => get<{ available: any[]; processed: string[] }>("/api/incidents"),
   whatIfNL: (question: string) => post<any>("/api/what-if/nl", { question }),
+  decisionSandbox: (payload: {
+    name: string; at: string; focus_segment_id: string; actions: DecisionAction[];
+    disruption?: string; disruption_segment_id?: string; disruption_load?: number;
+  }) => post<DecisionResult>("/api/decision-sandbox", payload),
+  roadNetwork: () => get<any[]>("/api/road-network"),
   sop: () => get<{ rule_id: number; title: string; text: string }[]>("/api/sop"),
   resources: () => get<Resource[]>("/api/resources"),
   resetResources: () => post<any>("/api/resources/reset"),

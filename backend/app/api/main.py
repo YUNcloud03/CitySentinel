@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from ..coordinator.coordinator import Coordinator, DataBundle
 from ..coordinator.whatif import run_what_if
+from ..coordinator.decision_sandbox import run_decision_sandbox
 from ..coordinator.whatif_nl import parse_question
 from ..llm import advisor, generator
 from ..llm.agent import AdvisorAgent
@@ -52,6 +53,16 @@ class WhatIfRequest(BaseModel):
     crowd_overrides: dict[str, dict] | None = None
     traffic_overrides: dict[str, dict] | None = None
     simulated_incident: dict | None = None
+
+
+class DecisionSandboxRequest(BaseModel):
+    name: str = "方案 A"
+    at: str
+    focus_segment_id: str
+    actions: list[dict] = Field(default_factory=list)
+    disruption: str = "none"
+    disruption_segment_id: str | None = None
+    disruption_load: float | None = None
 
 
 # ---- 基礎資料 ----
@@ -174,6 +185,15 @@ def get_incident(incident_id: str):
 @app.post("/api/what-if")
 def what_if(req: WhatIfRequest):
     return run_what_if(bundle, req.model_dump(exclude_none=True))
+
+
+@app.post("/api/decision-sandbox")
+def decision_sandbox(req: DecisionSandboxRequest):
+    """Operator-controlled simulation. No LLM is used and production state is immutable."""
+    try:
+        return run_decision_sandbox(bundle, req.model_dump(exclude_none=True))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 class WhatIfNLRequest(BaseModel):

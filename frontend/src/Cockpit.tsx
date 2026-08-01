@@ -2,8 +2,9 @@
 //   固定高度不捲動 · 一張常駐地圖 · 右側 Tab 情境抽屜（事件/決策/通知/證據）
 //   底部時間條 + 抽屜入口（預警/決策鏈/What-if）· 分級告警（Alert Rail + 快報卡 + 限定 modal）
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, type IncidentState, type Resource, type SimView } from "./api";
+import { api, type DecisionResult, type IncidentState, type Resource, type SimView } from "./api";
 import MapView from "./MapView";
+import DecisionSandbox from "./DecisionSandbox";
 import {
   AlertFeed,
   CoordinatorSummaryCard,
@@ -16,7 +17,7 @@ import {
   WhatIfPanel,
 } from "./components";
 
-type DrawerTab = "event" | "decision" | "notify" | "evidence";
+type DrawerTab = "event" | "decision" | "sandbox" | "notify" | "evidence";
 type BottomPanel = "alerts" | "trace" | "whatif" | null;
 
 interface Props {
@@ -163,6 +164,8 @@ export default function Cockpit(p: Props) {
   const [resources, setResources] = useState<Resource[]>([]);
   const [notis, setNotis] = useState<any[]>([]);
   const [muted, setMuted] = useState<string | null>(null);
+  const [selectedSegment, setSelectedSegment] = useState<string | null>(null);
+  const [preview, setPreview] = useState<DecisionResult | null>(null);
   const prevIncidentRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -197,7 +200,14 @@ export default function Cockpit(p: Props) {
 
       <div className="cockpit-body">
         <div className="map-region">
-          <MapView view={p.view} incident={p.incident} />
+          <MapView view={p.view} incident={p.incident}
+            selectedSegmentId={selectedSegment}
+            projectedTraffic={preview?.projected_traffic}
+            onSelectSegment={(segmentId) => {
+              setSelectedSegment(segmentId);
+              setPreview(null);
+              setTab("sandbox");
+            }} />
           <AlertRail view={p.view} onOpen={() => setBottom("alerts")} />
           {showReport && p.incident && (
             <EventReportCard incident={p.incident}
@@ -208,7 +218,7 @@ export default function Cockpit(p: Props) {
 
         <aside className="right-drawer">
           <div className="rd-tabs">
-            {([["event", "事件"], ["decision", "決策"], ["notify", "通知"], ["evidence", "證據"]] as [DrawerTab, string][])
+            {([["event", "事件"], ["decision", "建議"], ["sandbox", "推演"], ["notify", "通知"], ["evidence", "證據"]] as [DrawerTab, string][])
               .map(([id, label]) => (
                 <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>
                   {label}
@@ -230,6 +240,7 @@ export default function Cockpit(p: Props) {
                 ? <IncidentDetail incident={p.incident} onRefresh={p.onRefresh} />
                 : <p className="dim">從「事件」Tab 注入事件後，此處顯示 Coordinator 建議、疏散方案與資源調度。</p>
             )}
+            {tab === "sandbox" && <DecisionSandbox selectedSegmentId={selectedSegment} view={p.view} onPreview={setPreview} />}
             {tab === "notify" && <NotificationLifecyclePanel refreshKey={p.resourceKey} />}
             {tab === "evidence" && <EvidenceTab incident={p.incident} />}
           </div>
