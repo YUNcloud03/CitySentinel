@@ -182,6 +182,10 @@ class Coordinator:
             state["triggered_rules"] = sorted({t["rule_id"] for t in triggers})
             state["trigger_details"] = triggers
 
+            # SOP 1 壅塞分級：僅記錄同一時間切面的分級結果供建議書引用，
+            # 不併入 triggered_rules——分級屬環境監測，不由本事件驅動調度。
+            state["congestion_grading"] = rule_engine.evaluate_traffic(traffic_snap)["triggers"]
+
             # 規則歸因（修正 triggered/context 混淆）：
             #   caused_by_incident = 事件本身造成的規則（SOP2/5，及當事件就是該基地台時的 SOP3）
             #   context = 同一時間切面的環境監測規則，僅供情境參考，不驅動本事件的調度

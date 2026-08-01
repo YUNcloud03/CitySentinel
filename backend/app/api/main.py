@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, field_validator
 from ..coordinator.coordinator import Coordinator, DataBundle
 from ..coordinator.whatif import run_what_if
 from ..coordinator.decision_sandbox import run_decision_sandbox
+from ..coordinator.recommendation import build_recommendation
 from ..coordinator.whatif_nl import parse_question
 from ..llm import advisor, generator
 from ..llm.agent import AdvisorAgent
@@ -586,6 +587,15 @@ def history(until: str | None = None):
             {"t": format_ts(rec.timestamp), "users": rec.user_count, "roaming": rec.roaming_user_pct}
         )
     return {"traffic": traffic, "crowd": crowd}
+
+
+@app.get("/api/incidents/{incident_id}/recommendation")
+def incident_recommendation(incident_id: str):
+    """交控中心建議書：重組既有處理結果為官方要求的五項內容（不重新判定）。"""
+    state = coordinator.incident_states.get(incident_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail=f"事件 {incident_id} 尚未處理")
+    return build_recommendation(state, bundle.network)
 
 
 # ---- 16.6–16.7 決策鏈與通報 ----

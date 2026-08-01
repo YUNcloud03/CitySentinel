@@ -147,6 +147,8 @@ export const api = {
   notificationOp: (id: string, op: "approve" | "dispatch" | "retry") =>
     post<any>(`/api/notifications/${id}/${op}`),
   customIncident: (payload: any) => post<IncidentState>("/api/incidents/custom", payload),
+  recommendation: (incidentId: string) =>
+    get<any>(`/api/incidents/${incidentId}/recommendation`),
   aiSummary: (incidentId: string) => post<any>(`/api/incidents/${incidentId}/ai-summary`),
   llmStatus: () => get<{ provider: string | null; available: boolean }>("/api/llm/status"),
   logs: () => get<any[]>("/api/logs"),

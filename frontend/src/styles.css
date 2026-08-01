@@ -946,3 +946,61 @@ footer { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .cards { grid-template-columns: repeat(2, 1fr); }
   footer { grid-template-columns: 1fr; }
 }
+
+/* ---- 交控中心建議書（可列印交付文件） ---- */
+.rec-view { padding: 14px; overflow-y: auto; }
+.rec-doc { max-width: 900px; margin: 0 auto; }
+.rec-header {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  gap: 12px; border-bottom: 2px solid var(--border); padding-bottom: 10px; margin-bottom: 6px;
+}
+.rec-header h2 { margin: 0 0 2px; font-size: 19px; }
+.rec-assumption { margin: 10px 0; padding: 7px 9px; border-radius: 6px; }
+.rec-section { margin: 16px 0; }
+.rec-section h3 {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 14px; margin: 0 0 7px; padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.rec-num {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 19px; height: 19px; border-radius: 50%; flex: none;
+  background: var(--cyan); color: #06121f; font-size: 11.5px; font-weight: 700;
+}
+.rec-empty { margin: 4px 0; font-style: italic; }
+.rec-kv { width: 100%; border-collapse: collapse; }
+.rec-kv th {
+  text-align: left; width: 92px; padding: 4px 8px 4px 0;
+  font-weight: 600; color: var(--dim); vertical-align: top; font-size: 12px;
+}
+.rec-kv td { padding: 4px 0; font-size: 12.5px; }
+.rec-table { width: 100%; border-collapse: collapse; margin: 6px 0; }
+.rec-table th {
+  text-align: left; font-size: 11.5px; color: var(--dim);
+  border-bottom: 1px solid var(--border); padding: 4px 6px;
+}
+.rec-table td { padding: 4px 6px; border-top: 1px solid var(--border); font-size: 12px; }
+.rec-route { margin: 5px 0; font-size: 12.5px; }
+.rec-route.primary { padding: 6px 8px; background: rgba(56, 189, 248, 0.08); border-radius: 6px; }
+.rec-route span + span::before { content: "、"; }
+.rec-list { margin: 5px 0; padding-left: 18px; font-size: 12.5px; }
+.rec-list li { margin: 3px 0; }
+.rec-footer { margin-top: 16px; padding-top: 8px; border-top: 1px solid var(--border); }
+.warn-text { color: var(--amber); }
+
+/* 列印：只輸出建議書本體，隱藏導覽與互動元件 */
+@media print {
+  @page { margin: 14mm; }
+  body { background: #fff; }
+  header, nav, .tabs, .rec-print, .sim-controls, footer { display: none !important; }
+  .app, .rec-view { display: block; padding: 0; overflow: visible; background: #fff; }
+  .panel, .rec-doc {
+    max-width: none; border: none; box-shadow: none; background: #fff; color: #000;
+  }
+  .rec-doc, .rec-doc * { color: #000 !important; }
+  .rec-section { break-inside: avoid; }
+  .rec-table th, .rec-table td, .rec-kv th { border-color: #999 !important; }
+  .chip { border: 1px solid #666; background: none !important; }
+  .rec-num { background: #ddd !important; color: #000 !important; }
+  .rec-route.primary { background: #f0f0f0 !important; }
+}

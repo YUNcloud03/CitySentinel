@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type IncidentState, type SimView } from "./api";
 import Cockpit from "./Cockpit";
+import RecommendationView from "./RecommendationView";
 import GlobeIntro from "./GlobeIntro";
 import { AdvisorChatView, CitizenView, MonitorView, VerifyView } from "./views";
 
 const TICK_MS = 2500; // 前端節奏：2.5 秒推進一個資料時間點
 
-type Page = "overview" | "command" | "monitor" | "verify" | "advisor" | "citizen";
+type Page = "overview" | "command" | "monitor" | "recommendation" | "verify" | "advisor" | "citizen";
 
 const PAGES: [Page, string][] = [
   ["overview", "總覽"],
   ["command", "指揮中心"],
   ["monitor", "監測中心"],
+  ["recommendation", "建議書"],
   ["verify", "紀錄與驗證"],
   ["advisor", "顧問對話"],
   ["citizen", "民眾端"],
@@ -128,6 +130,7 @@ export default function App() {
 
       {page === "overview" && <GlobeIntro onEnter={setPage} />}
       {page === "monitor" && <MonitorView view={view} resourceKey={resourceKey} />}
+      {page === "recommendation" && <RecommendationView incident={incident} />}
       {page === "verify" && <VerifyView refreshKey={resourceKey} />}
       {page === "advisor" && <AdvisorChatView />}
       {page === "citizen" && <CitizenView />}
