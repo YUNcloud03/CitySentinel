@@ -49,6 +49,8 @@ export default function GreenCorridorPanel({ view, incident, result, onResult }:
   useEffect(() => {
     if (!result || result.approval_status !== "APPROVED_FOR_SIMULATION" || result.runtime_state.completed) return;
     const timer = window.setInterval(() => {
+      // 分頁不可見時暫停推進；可見時以 1 模擬秒粒度維持 5 倍播放。
+      if (document.hidden) return;
       const next = Math.min(elapsedRef.current + 1, result.runtime_state.total_seconds + 1);
       elapsedRef.current = next;
       setElapsed(next);

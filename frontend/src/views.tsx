@@ -116,8 +116,13 @@ function LogListPanel() {
   const reload = () => { api.logs().then(setEntries).catch(() => {}); };
   useEffect(() => {
     reload();
-    const t = setInterval(reload, 5000);
-    return () => clearInterval(t);
+    const t = setInterval(() => { if (!document.hidden) reload(); }, 5000);
+    const onVisible = () => { if (!document.hidden) reload(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, []);
 
   const shown = filter === "全部" ? entries : entries.filter((e) => e.category === filter);
@@ -404,8 +409,13 @@ export function CitizenView() {
       } catch { /* ignore */ }
     };
     poll();
-    const t = setInterval(poll, 2500);
-    return () => clearInterval(t);
+    const t = setInterval(() => { if (!document.hidden) poll(); }, 2500);
+    const onVisible = () => { if (!document.hidden) poll(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [area]);
 
   const delivered = received.filter((n) => !cleared.has(n.notification_id));

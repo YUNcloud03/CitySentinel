@@ -235,8 +235,13 @@ def generate_multilingual(
 def build_notification_content(
     state: dict, incident: dict, at: datetime,
     affected_id: str, affected_name: str,
+    multilingual: bool = True,
 ) -> dict:
-    """產生 CMS 與多語訊息（LLM 優先、模板保底），回傳 notifications dict。"""
+    """產生 CMS 與多語訊息（LLM 優先、模板保底），回傳 notifications dict。
+
+    multilingual=False（SOP 6 未觸發）時不呼叫四語 LLM，直接用模板——
+    反正呼叫端只會取用中文，省下一次無謂的 LLM 呼叫。
+    """
     ete_display = state["ete_result"]["ete_minutes_display"] if state.get("ete_result") else 0
     primary = (state.get("routing_result") or {}).get("primary_route")
     primary_name = primary["name"] if primary else None
@@ -270,8 +275,12 @@ def build_notification_content(
     fallback_msgs = notifications.multilingual_reroute(
         affected_name, affected_en, primary_name, primary_en, ete_display, at,
         incident_type=incident.get("type"), rules=rules)
-    messages, msg_meta = generate_multilingual(
-        affected_name, affected_en, primary_name, primary_en,
-        ete_display, at, incident, fallback_msgs, extra_notes=extra_notes)
+    if multilingual:
+        messages, msg_meta = generate_multilingual(
+            affected_name, affected_en, primary_name, primary_en,
+            ete_display, at, incident, fallback_msgs, extra_notes=extra_notes)
+    else:
+        messages, msg_meta = fallback_msgs, {"source": "template",
+                                             "reason": "SOP 6 未觸發，僅需中文"}
     result["messages_meta"] = msg_meta
     return result | {"_full_messages": messages}

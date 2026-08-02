@@ -820,14 +820,17 @@ class Coordinator:
         affected_seg = self.bundle.network.get(affected_id)
         affected_name = affected_seg.name if affected_seg else incident.get("location", "受影響區域")
 
+        # SOP 6：任一基地台漫遊率 >= 30% 才須多語；未觸發僅產出中文。
+        # 先判定再生成——否則未觸發時仍會白呼叫一次四語 LLM，結果卻只留中文。
+        roaming_triggers = [t for t in crowd_triggers if t["rule_id"] == 6]
+
         content = generator.build_notification_content(
-            state, incident, at, affected_id, affected_name
+            state, incident, at, affected_id, affected_name,
+            multilingual=bool(roaming_triggers),
         )
         msgs = content.pop("_full_messages")
         result = content
 
-        # SOP 6：任一基地台漫遊率 >= 30% 才須多語；未觸發僅產出中文
-        roaming_triggers = [t for t in crowd_triggers if t["rule_id"] == 6]
         result["multilingual_required"] = bool(roaming_triggers)
         result["roaming_evidence"] = [t["evidence"] for t in roaming_triggers]
         result["multilingual_decision"] = self._multilingual_decision(

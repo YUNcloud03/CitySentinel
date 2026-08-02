@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import json
 import os
+import random
+import threading
 import time
 from collections import deque
 from datetime import datetime
@@ -45,6 +47,12 @@ class Provider(NamedTuple):
 # 註冊表：順序即優先序。model 為預設值，可由 CITY_LLM_MODEL 覆寫，
 # 故廠商更新模型代號時不必動這裡。
 PROVIDERS: tuple[Provider, ...] = (
+    # Bedrock 排第一：黑客松環境以此為主，其餘金鑰並存時自動成為備援。
+    # 端點區域須與金鑰簽發區域一致（金鑰為區域性），可由 CITY_LLM_BASE_URL 覆寫。
+    # Kimi 不支援 geo/global inference profile，model 不可加 "us." 前綴。
+    Provider("bedrock", "openai", ("AWS_BEARER_TOKEN_BEDROCK",),
+             "moonshotai.kimi-k2.5",
+             "https://bedrock-mantle.us-west-2.api.aws/v1"),
     Provider("anthropic", "anthropic", ("ANTHROPIC_API_KEY",), "claude-opus-4-8"),
     Provider("openai", "openai", ("OPENAI_API_KEY",), "gpt-4o-mini"),
     Provider("google", "openai", ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
@@ -66,6 +74,48 @@ _active: Provider | None = None
 # LLM 呼叫留痕（稽核用）：目的、provider、延遲、成敗。內容不含原始 prompt 全文
 # （避免 log 爆量），但足以回答「哪次生成用了 LLM、花多久、有沒有失敗」。
 CALL_LOG: deque[dict] = deque(maxlen=200)
+
+# 限流：Bedrock mantle 端點不設 RPM 上限（只管 TPM），實測連續呼叫無節流，
+# 故固定間隔限流預設關閉；AWS 明言可能有未公開的內部限流，因此一律做退避重試。
+_MAX_RPS = float(os.environ.get("CITY_LLM_MAX_RPS", "0") or 0)
+_rate_lock = threading.Lock()
+_next_slot = 0.0
+
+
+def throttle() -> None:
+    """全域固定間隔限流（CITY_LLM_MAX_RPS > 0 才啟用）。
+
+    FastAPI 同步 endpoint 跑在 threadpool，是真並行，故用 threading.Lock；
+    sleep 放在 lock 外，讓併發呼叫排隊而非搶鎖。
+    """
+    if _MAX_RPS <= 0:
+        return
+    global _next_slot
+    with _rate_lock:
+        now = time.monotonic()
+        wait = max(0.0, _next_slot - now)
+        _next_slot = max(now, _next_slot) + 1.0 / _MAX_RPS
+    if wait:
+        time.sleep(wait)
+
+
+def call_with_retry(fn, attempts: int = 3):
+    """對 429／限流類暫時性錯誤做指數退避重試（AWS 建議做法）。
+
+    非暫時性錯誤（如 400 參數錯誤）立即拋出，不浪費配額；
+    重試耗盡仍失敗也往外拋，由呼叫端退回確定性模板。
+    """
+    for i in range(attempts):
+        throttle()
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001 - 需檢查訊息判斷是否可重試
+            text = str(exc).lower()
+            transient = ("429" in text or "throttl" in text or "too many requests" in text
+                         or "503" in text or "timeout" in text)
+            if not transient or i == attempts - 1:
+                raise
+            time.sleep((2 ** i) + random.random())
 
 
 def _resolve() -> Provider | None:
@@ -160,19 +210,19 @@ def structured_completion(
 
     try:
         if prov.protocol == "anthropic":
-            response = client.messages.parse(
+            response = call_with_retry(lambda: client.messages.parse(
                 model=prov.model,
                 max_tokens=max_tokens,
                 system=system,
                 messages=[{"role": "user", "content": user}],
                 output_format=schema,
-            )
+            ))
             _log(True)
             return response.parsed_output
         # openai 相容：JSON mode + 客戶端 schema 驗證（跨版本、跨廠商相容）。
         # json_object 模式不強制 schema，故把 schema 注入 system prompt 要求遵循。
         schema_json = json.dumps(schema.model_json_schema(), ensure_ascii=False)
-        response = client.chat.completions.create(
+        response = call_with_retry(lambda: client.chat.completions.create(
             model=prov.model,
             max_tokens=max_tokens,
             temperature=0,
@@ -186,7 +236,7 @@ def structured_completion(
                 )},
                 {"role": "user", "content": user},
             ],
-        )
+        ))
         raw = response.choices[0].message.content
         parsed = schema.model_validate(json.loads(raw))
         _log(True)

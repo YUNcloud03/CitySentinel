@@ -26,6 +26,7 @@ npm-debug.log*
 *.pdf.tmp
 slide-*.jpg
 ~$*
+probe_bedrock.py
 
 # --- 編輯器 / 作業系統 ---
 .vscode/
