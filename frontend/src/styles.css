@@ -532,12 +532,6 @@ td { padding: 3px 4px; border-top: 1px solid var(--border); font-size: 12px; }
   background: transparent; color: #8ea8bf; font-size: 9px; letter-spacing: .2px;
 }
 .map-view-controls button:disabled { opacity: .36; cursor: not-allowed; }
-.interagency-disclaimer {
-  display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px;
-  border: 1px solid rgba(245,166,35,.32); border-radius: 8px;
-  background: rgba(245,166,35,.06); color: var(--dim); font-size: 10px;
-}
-.interagency-disclaimer b { flex: 0 0 auto; color: #ffd17a; }
 .coord-status { display: inline-flex; max-width: 150px; padding: 3px 6px; border-radius: 999px; background: rgba(127,139,158,.14); color: #c5ceda; font-size: 9px; }
 .coord-status.status-authorized_for_simulation,
 .coord-status.status-adjusted_and_authorized { background: rgba(47,191,113,.14); color: #79dbb2; }

@@ -339,10 +339,6 @@ export default function RecommendationView({ incident }: { incident: IncidentSta
 
         <Section n={5} title="跨系統聯動">
           <p className="small dim">{inter.trigger_reason}</p>
-          <p className="interagency-disclaimer">
-            <b>{inter.external_system_connected ? "外部系統已連線" : "模擬聯動 Adapter"}</b>
-            {inter.execution_disclaimer}
-          </p>
           {inter.requests.length === 0 ? (
             <Empty>無跨系統請求。</Empty>
           ) : (
