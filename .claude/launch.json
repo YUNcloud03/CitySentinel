@@ -3,7 +3,7 @@
   "configurations": [
     {
       "name": "backend",
-      "runtimeExecutable": "C:\\Users\\LIYUN\\anaconda3\\python.exe",
+      "runtimeExecutable": "..\\.venv\\Scripts\\python.exe",
       "runtimeArgs": ["-m", "uvicorn", "app.api.main:app", "--port", "8000"],
       "cwd": "backend",
       "port": 8000
