@@ -67,6 +67,28 @@ def test_rolling_corridor_never_prioritizes_two_intersections():
     assert len(seen) > 1
 
 
+def test_devices_at_same_physical_intersection_switch_as_one_group():
+    actions = [
+        {
+            "execution_id": "TO_SCENE:IC-01", "intersection_id": "IC-01",
+            "device_id": device_id, "name": "測試路口", "mission_leg_id": "TO_SCENE",
+            "prepare_at_seconds": 0, "activate_at_seconds": 8,
+            "passage_at_seconds": 10, "restore_at_seconds": 22,
+        }
+        for device_id in ("SIG-A", "SIG-B")
+    ]
+    plan = {
+        "signal_actions": actions, "route_geometry": [[121.5, 25.0], [121.51, 25.01]],
+        "approval_status": "APPROVED_FOR_SIMULATION",
+    }
+
+    state = corridor_state_at(plan, 9, approved=True)
+
+    assert len(state["intersection_states"]) == 1
+    assert state["intersection_states"][0]["state"] == "EMERGENCY_GREEN"
+    assert state["active_signal_device_ids"] == ["SIG-A", "SIG-B"]
+
+
 def test_corridor_restores_passed_intersection_before_completion():
     result = simulate_green_corridor(DataBundle(), _scenario())
     first = result["runtime_state"]["intersection_states"][0]

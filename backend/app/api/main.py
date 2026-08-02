@@ -13,7 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 
 from ..coordinator.coordinator import Coordinator, DataBundle
-from ..coordinator.green_corridor import corridor_state_at, simulate_green_corridor
+from ..coordinator.closed_loop import register_replan
+from ..coordinator.green_corridor import corridor_state_at, simulate_green_corridor, simulate_rescue_mission
 from ..coordinator.whatif import run_what_if
 from ..coordinator.decision_sandbox import run_decision_sandbox
 from ..coordinator.recommendation import build_recommendation
@@ -80,10 +81,12 @@ class DecisionSandboxRequest(BaseModel):
 
 class GreenCorridorRequest(BaseModel):
     at: str
-    origin_segment_id: str
-    destination_segment_id: str
+    origin_segment_id: str | None = None
+    destination_segment_id: str | None = None
     vehicle_type: Literal["Ambulance", "FireEngine"] = "Ambulance"
     blocked_segment_ids: list[str] = Field(default_factory=list)
+    auto_dispatch: bool = False
+    incident_id: str | None = None
 
 
 class GreenCorridorApprovalRequest(BaseModel):
@@ -175,12 +178,44 @@ def simulation_seek(req: SimulationSeekRequest):
 
 @app.post("/api/simulation/tick")
 def simulation_tick():
-    return player.tick()
+    view = player.tick()
+    cycle = coordinator.run_closed_loop_cycle(view)
+    if cycle.get("replan_required"):
+        state = coordinator.incident_states[cycle["incident_id"]]
+        seed = 42 + int(state["closed_loop"]["replan_count"]) + 1
+        try:
+            result = build_plan_comparison(bundle, state, {"random_seed": seed})
+            plan_comparison_runs[result["simulation_run_id"]] = result
+            register_replan(state, result["simulation_run_id"], view["sim_time"])
+            state["decision_trace"].append({
+                "step": "COORDINATOR_REPLANNED",
+                "at": datetime.now().isoformat(timespec="milliseconds"),
+                "detail": {
+                    "simulation_run_id": result["simulation_run_id"],
+                    "recommended_plan_id": result["recommended_plan_id"],
+                    "reason": "週期 KPI 未達標或狀態惡化，自動重新最佳化；執行仍待指揮官核准",
+                    "sim_time": view["sim_time"],
+                },
+            })
+            cycle["replanned_run_id"] = result["simulation_run_id"]
+        except KeyError as exc:
+            cycle["replan_error"] = str(exc)
+    if cycle.get("active"):
+        cycle["closed_loop"] = coordinator.incident_states[cycle["incident_id"]]["closed_loop"]
+    view["coordinator_cycle"] = cycle
+    return view
 
 
 @app.get("/api/simulation/state")
 def simulation_state():
-    return player.current_view()
+    view = player.current_view()
+    state = player.active_incident_state
+    view["coordinator_cycle"] = {
+        "active": bool(state),
+        "incident_id": state.get("incident_id") if state else None,
+        "closed_loop": state.get("closed_loop") if state else None,
+    }
+    return view
 
 
 @app.post("/api/simulation/reset")
@@ -288,7 +323,9 @@ def approve_plan_comparison(run_id: str, req: PlanApprovalRequest):
         "score": plan["score"],
         "status": "ACTIVE_IN_SIMULATION",
     }
-    state["approved_optimization"] = approval
+    coordinator.authorize_optimization_package(
+        stored["scenario_id"], approval, simulation_time=format_ts(effective_sim_time)
+    )
     state.setdefault("decision_trace", []).append({
         "step": "OPTIMIZED_PLAN_APPROVED",
         "at": approval["approved_at"],
@@ -432,7 +469,22 @@ def green_corridor(req: GreenCorridorRequest):
         scenario = req.model_dump()
         if player.active_incident_state:
             scenario["_incident_state"] = player.active_incident_state
-        result = simulate_green_corridor(bundle, scenario)
+        if req.auto_dispatch:
+            if req.vehicle_type != "Ambulance":
+                raise ValueError("醫院雙程自動派遣目前僅支援救護車")
+            active_id = (player.active_incident_state or {}).get("incident_id")
+            if req.incident_id and active_id != req.incident_id:
+                raise ValueError("指定事件不是目前進行中的事件")
+            scenario["_unavailable_unit_ids"] = [
+                run["mission"]["ambulance"]["unit_id"]
+                for run in green_corridor_runs.values()
+                if run.get("mission") and run.get("approval_status") in {"READY_FOR_APPROVAL", "APPROVED_FOR_SIMULATION"}
+            ]
+            result = simulate_rescue_mission(bundle, scenario)
+        else:
+            if not req.origin_segment_id or not req.destination_segment_id:
+                raise ValueError("手動救援走廊需要起點與目的路段")
+            result = simulate_green_corridor(bundle, scenario)
         green_corridor_runs[result["scenario_id"]] = result
         return result
     except KeyError as exc:
@@ -461,6 +513,9 @@ def approve_green_corridor(scenario_id: str, req: GreenCorridorApprovalRequest):
     result["approved_by"] = req.approved_by
     result["approved_at"] = approved_at
     result["runtime_state"] = corridor_state_at(result, 0, approved=True)
+    if result.get("mission"):
+        result["mission"]["ambulance"]["status"] = "DISPATCHED"
+        result["mission"]["status"] = "TO_SCENE"
     result["decision_trace"].append({
         "step": "SIMULATION_ACTIVATED",
         "detail": {"approved_by": req.approved_by, "approved_at": approved_at},
@@ -477,6 +532,10 @@ def green_corridor_state(scenario_id: str, elapsed_seconds: int = 0):
         raise HTTPException(status_code=422, detail="elapsed_seconds 不可小於 0")
     state = corridor_state_at(result, elapsed_seconds)
     result["runtime_state"] = state
+    if result.get("mission"):
+        result["mission"]["status"] = state.get("mission_phase")
+        if state.get("completed"):
+            result["mission"]["ambulance"]["status"] = "ARRIVED_RECEIVING_HOSPITAL"
     return state
 
 

@@ -158,6 +158,9 @@ def coordinator_contract() -> dict:
             "severity-dependent resource quantities", "finite inventory and shortfall detection",
             "lower-priority preemption proposals", "human-approved preemption",
             "priority-ordered automatic refill after release", "re-injection recalculates and releases prior allocation",
+            "simulation-time closed-loop KPI evaluation", "automatic constrained re-planning when KPI misses its review target",
+            "single approval gate commits the optimized controls and reserved response tasks",
+            "field confirmation gate before incident resolution",
         ],
         "proof_scenario": [
             "inject Medium EVT_003 to reserve police", "inject Critical ACC_001",
@@ -166,10 +169,10 @@ def coordinator_contract() -> dict:
             "approve preemption or reject the lower-priority task and observe priority refill plus dual audit traces",
         ],
         "not_implemented": [
-            "periodic priority scoring from wait time or worsening trends", "resolved/cancelled incident lifecycle",
-            "en-route/arrived/completed/failed task states", "automatic five-minute escalation timer",
+            "production traffic-controller adapters", "signed field telemetry provenance",
+            "resource failed-state telemetry and automatic replacement dispatch",
         ],
-        "classification": "deterministic coordinator with cross-incident resource rebalancing; not a fully autonomous agent",
+        "classification": "deterministic supervised closed-loop Coordinator (human-on-the-loop for consequential commands; LLM has no execution authority)",
     }
 
 

@@ -89,6 +89,8 @@ def test_closed_custom_incident_persists_until_human_resolution():
         state["incident_id"], operator="field_commander", reason="現場確認排除",
         simulation_time="2026-05-20 22:30",
     )
+    assert state["closed_loop"]["status"] == "RESOLVED"
+    assert state["closed_loop"]["pending_human_gate"] is None
     resolved = player.seek("2026-05-20 22:30")
     assert resolved["simulation_context"]["active"] is False
     assert resolved["simulation_context"]["reason"] == "resolved_by_human"
