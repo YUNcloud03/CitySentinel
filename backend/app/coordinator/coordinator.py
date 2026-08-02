@@ -32,6 +32,7 @@ from ..notifications_center import NotificationCenter
 from ..resources import dispatch_engine
 from ..resources.registry import ResourceRegistry
 from ..retrievers.sop_retriever import SOPRetriever
+from .closed_loop import evaluate_closed_loop, new_closed_loop
 
 
 def build_coordinator_summary(state: dict) -> dict:
@@ -202,6 +203,7 @@ class Coordinator:
             "started_at": datetime.now().isoformat(timespec="seconds"),
             "completed_at": None,
             "errors": [],
+            "closed_loop": new_closed_loop(incident, format_ts(at)),
         }
 
         def step(name: str, detail):
@@ -440,6 +442,63 @@ class Coordinator:
         state["simulation_run_id"] = f"INCIDENT-{state['input_sha256'][:12]}"
 
         self.incident_states[state["incident_id"]] = state
+        return state
+
+    def run_closed_loop_cycle(self, view: dict) -> dict:
+        """Observe an active scenario and advance its supervised control loop."""
+        incident_id = (view.get("simulation_context") or {}).get("incident_id")
+        state = self.incident_states.get(incident_id) if incident_id else None
+        if state is None:
+            return {"active": False, "reason": "no_active_incident"}
+        result = evaluate_closed_loop(state, view)
+        if result.get("changed"):
+            state["decision_trace"].append({
+                "step": "CLOSED_LOOP_EVALUATED",
+                "at": datetime.now().isoformat(timespec="milliseconds"),
+                "detail": result.get("cycle"),
+            })
+        return {"active": True, "incident_id": incident_id, **result}
+
+    def authorize_optimization_package(
+        self, incident_id: str, approval: dict, *, simulation_time: str
+    ) -> dict:
+        """Commit an approved optimization package as one auditable execution gate."""
+        state = self.incident_states.get(incident_id)
+        if state is None:
+            raise KeyError(f"事件 {incident_id} 尚未處理")
+        state["approved_optimization"] = approval
+        committed = []
+        for action in (state.get("dispatch") or {}).get("actions", []):
+            if action.get("status") not in {"proposed", "shortfall"}:
+                continue
+            if int(action.get("fulfilled_count") or 0) <= 0:
+                continue
+            self.dispatch_action(
+                incident_id,
+                action["action_id"],
+                "accept",
+                reason=f"隨最佳化方案 {approval['plan_id']} 一併核准",
+                operator=approval["approved_by"],
+                simulation_time=simulation_time,
+            )
+            committed.append(action["action_id"])
+        loop = state["closed_loop"]
+        loop["status"] = "EXECUTING_APPROVED_PLAN"
+        loop["pending_human_gate"] = None
+        loop["last_transition_at"] = simulation_time
+        state["operational_status"] = "RESPONSE_AUTHORIZED"
+        state["decision_trace"].append({
+            "step": "COORDINATOR_EXECUTION_STARTED",
+            "at": datetime.now().isoformat(timespec="milliseconds"),
+            "detail": {
+                "plan_id": approval["plan_id"],
+                "run_id": approval["run_id"],
+                "commands": approval["commands"],
+                "committed_action_ids": committed,
+                "simulation_time": simulation_time,
+                "human_gate": "approved",
+            },
+        })
         return state
 
     # ---- 調度彈性：優先權抽調建議 / 釋出回填 ----
@@ -688,6 +747,12 @@ class Coordinator:
             "at": datetime.now().isoformat(timespec="milliseconds"),
             "detail": {"action_id": action_id, "simulation_time": simulation_time, **override},
         })
+        if op in {"accept", "adjust"} and action.get("fulfilled_count", 0) > 0:
+            loop = state.get("closed_loop")
+            if loop:
+                loop["status"] = "EXECUTING_APPROVED_PLAN"
+                loop["pending_human_gate"] = None
+                loop["last_transition_at"] = simulation_time or state.get("as_of")
         self._refresh_gaps(state)
         # 拒絕/調降釋出的資源，自動回填其他事件的缺口（優先權排序）
         if op in ("reject", "adjust"):
@@ -717,6 +782,10 @@ class Coordinator:
         state["operational_status"] = "RESOLVED"
         state["resolved_at"] = simulation_time
         state["resolution"] = {"operator": operator, "reason": reason}
+        if state.get("closed_loop"):
+            state["closed_loop"]["status"] = "RESOLVED"
+            state["closed_loop"]["pending_human_gate"] = None
+            state["closed_loop"]["last_transition_at"] = simulation_time
         state["decision_trace"].append({
             "step": "INCIDENT_RESOLVED",
             "at": datetime.now().isoformat(timespec="milliseconds"),

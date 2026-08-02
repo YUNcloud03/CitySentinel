@@ -554,7 +554,11 @@ export function EmergencyModal({ view }: { view: SimView | null }) {
         <div className="em-title">🚨 緊急狀況警報</div>
         <div className="em-body">
           <RuleBadge id={current.rule_id} />
-          <b className="em-entity">{current.entity_id}</b>
+          <b className="em-entity">
+            {view?.traffic?.[current.entity_id]?.road_name
+              ?? view?.crowd?.[current.entity_id]?.location_name
+              ?? current.entity_id}
+          </b>
           <div className="em-summary">
             {summary ? (
               <>

@@ -79,7 +79,33 @@ export interface SimView {
     reason?: string;
   };
   scenario_comparison?: ScenarioComparison | null;
+  coordinator_cycle?: {
+    active: boolean;
+    incident_id?: string | null;
+    replanned_run_id?: string;
+    closed_loop?: ClosedLoopState | null;
+  };
   message?: string;
+}
+
+export interface ClosedLoopState {
+  mode: "SUPERVISED_CLOSED_LOOP" | string;
+  status: string;
+  cycle_count: number;
+  replan_count: number;
+  review_interval_minutes: number;
+  next_review_at: string;
+  last_evaluated_at?: string | null;
+  pending_human_gate?: string | null;
+  latest_plan_run_id?: string | null;
+  latest_metrics?: Record<string, any> | null;
+  objectives: Record<string, any>;
+  safety_policy: {
+    automatic: string[];
+    approval_required: string[];
+    llm_authority: string;
+  };
+  cycles: any[];
 }
 
 export interface ScenarioComparisonMetrics {
@@ -189,6 +215,7 @@ export interface IncidentState {
   simulation_run_id?: string;
   input_sha256?: string;
   errors: string[];
+  closed_loop?: ClosedLoopState;
 }
 
 export interface PlanComparisonKpis {
@@ -351,7 +378,23 @@ export interface GreenCorridorResult {
     pedestrian_clearance_seconds: number; reason: string;
   }[];
   dispatch_recommendation: {
-    resource_type: string; requested_units: number; critical_segment_ids: string[]; reason: string;
+    resource_type: string; requested_units: number; critical_segment_ids: string[]; reason: string; unit_id?: string;
+  };
+  mission?: {
+    mode: "AUTO_HOSPITAL_ROUND_TRIP";
+    incident_id: string;
+    status?: "TO_SCENE" | "ON_SCENE" | "TO_HOSPITAL" | "COMPLETED";
+    scene: { name: string; segment_id: string; coordinates: [number, number] };
+    ambulance: { unit_id: string; status: string; inventory_source: string };
+    dispatch_hospital: { hospital_id: string; name: string; address: string; coordinates: [number, number]; segment_id: string };
+    receiving_hospital: { hospital_id: string; name: string; address: string; coordinates: [number, number]; segment_id: string; ed_load: number; accepting: boolean };
+    on_scene_service_seconds: number;
+    legs: {
+      leg_id: "TO_SCENE" | "TO_HOSPITAL"; label: string; start_name: string; end_name: string;
+      route_segment_ids: string[]; route_names: string[]; route_geometry: [number, number][];
+      route_details: GreenCorridorResult["route_details"]; eta: GreenCorridorResult["eta"];
+      start_seconds: number; travel_end_seconds: number; end_seconds: number;
+    }[];
   };
   messages: Record<"zh" | "en" | "ja" | "ko", string>;
   evidence: Record<string, any>;
@@ -363,11 +406,16 @@ export interface GreenCorridorResult {
   runtime_state: {
     elapsed_seconds: number; total_seconds: number; completed: boolean;
     current_intersection_id: string | null;
+    current_intersection_name?: string | null;
     active_signal_device_ids: string[]; clearance_signal_device_ids: string[];
     vehicle_position: [number, number] | null;
     vehicle_progress_pct: number;
+    current_leg_progress_pct?: number;
+    mission_phase?: "AWAITING_APPROVAL" | "TO_SCENE" | "ON_SCENE" | "TO_HOSPITAL" | "COMPLETED" | "SINGLE_LEG";
+    current_leg_id?: "TO_SCENE" | "TO_HOSPITAL" | null;
     vehicle_position_source: "simulated_from_route_geometry_and_corridor_elapsed_time";
     next_intersection_id: string | null;
+    next_intersection_name?: string | null;
     intersection_states: { intersection_id: string; name: string; state: string; device_ids: string[];
       prepare_at_seconds: number; activate_at_seconds: number; passage_at_seconds: number; restore_at_seconds: number }[];
   };
@@ -403,8 +451,9 @@ export const api = {
     disruption?: string; disruption_segment_id?: string; disruption_load?: number;
   }) => post<DecisionResult>("/api/decision-sandbox", payload),
   greenCorridor: (payload: {
-    at: string; origin_segment_id: string; destination_segment_id: string;
+    at: string; origin_segment_id?: string; destination_segment_id?: string;
     vehicle_type: "Ambulance" | "FireEngine"; blocked_segment_ids: string[];
+    auto_dispatch?: boolean; incident_id?: string;
   }) => post<GreenCorridorResult>("/api/green-corridor/simulate", payload, greenCorridorSchema),
   approveGreenCorridor: (scenarioId: string, approvedBy = "指揮官") =>
     post<GreenCorridorResult>(`/api/green-corridor/${scenarioId}/approve`, { approved_by: approvedBy }, greenCorridorSchema),

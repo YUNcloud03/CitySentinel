@@ -68,11 +68,11 @@ OPENAI_API_KEY=...        # 次選
 - ✅ Rule Engine：SOP 1–6 確定性判定（含證據數值輸出）
 - ✅ Routing Engine：SOP 2 候選篩選（容量 ≥1000、直接相交、上下游判定、排除理由）
 - ✅ ETE Calculator：SOP 7 公式（後端保留原值、UI 四捨五入）
-- ✅ Coordinator：事件狀態機 NEW→…→COMPLETED，含 decision trace
+- ✅ 閉環 Coordinator：事件狀態機 + KPI 回看 + 未達標自動重規劃 + 現場確認結案，含 decision trace
 - ✅ What-if Sandbox：覆寫假設、不動正式狀態
 - ✅ 時序播放器：沿資料時間軸推進、自動觸發預警
 - ✅ 通報模板：CMS + 中/英/日/韓（LLM fallback 保證）
-- ✅ 測試：後端 171 項、前端 10 項全數通過（含事件生命週期、地理計算與端到端場景）
+- ✅ 測試：後端 190 項、前端 11 項全數通過（含閉環狀態、事件生命週期、地理計算與端到端場景）
 
 ## Phase 2 進度
 

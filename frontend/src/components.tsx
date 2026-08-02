@@ -618,6 +618,7 @@ export function IncidentDetail({ incident, onRefresh, onDecisionAccepted }: {
           </button>
         )}
       </div>
+      {incident.closed_loop && <ClosedLoopCoordinatorCard loop={incident.closed_loop} />}
       {attr ? (
         <div className="attribution">
           <div><span className="attr-label caused">事件觸發</span>
@@ -901,7 +902,6 @@ export function CustomEventForm({ onInjected, simTime }: {
     lanes_total: 2,
     lanes_closed: 2,
     review_interval_minutes: 15,
-    source_type: "operator",
     human_confirmed: true,
     description: "",
     roaming_override_pct: "",  // ""＝依實際資料
@@ -985,6 +985,7 @@ export function CustomEventForm({ onInjected, simTime }: {
         .find(([id]) => id === form.affected_segment)?.[1] ?? "";
       const state = await api.customIncident({
         ...form,
+        source_type: "operator", // 自訂事件只來自已登入的指揮中心操作員
         // 空字串＝不覆寫，須送 null 而非 ""（後端欄位為 float | None）
         roaming_override_pct: form.roaming_override_pct === ""
           ? null : Number(form.roaming_override_pct),
@@ -1089,14 +1090,7 @@ export function CustomEventForm({ onInjected, simTime }: {
           <select value={form.review_interval_minutes} onChange={(e) => set("review_interval_minutes", Number(e.target.value))}>
             {[5, 10, 15, 30, 60].map((minutes) => <option key={minutes} value={minutes}>{minutes} 分鐘</option>)}
           </select>
-          <small>到期只提醒重新確認，不會自動判定事件結束</small>
-        </label>
-        <label>資料來源
-          <select value={form.source_type} onChange={(e) => set("source_type", e.target.value)}>
-            <option value="operator">指揮官輸入</option><option value="official">官方通報</option>
-            <option value="iot">IoT 感測器</option><option value="camera">攝影機辨識</option>
-            <option value="citizen">民眾回報</option><option value="unknown">來源待確認</option>
-          </select>
+          <small>到期由 Coordinator 驗證成效；未達標自動重規劃，事件結束仍需現場確認</small>
         </label>
         <label className="custom-event-confirm">
           <input type="checkbox" checked={form.human_confirmed}
@@ -1145,6 +1139,46 @@ export function CustomEventForm({ onInjected, simTime }: {
       </div>
       {error && <div className="warn">{error}</div>}
     </details>
+  );
+}
+
+function ClosedLoopCoordinatorCard({ loop }: { loop: NonNullable<IncidentState["closed_loop"]> }) {
+  const metrics = loop.latest_metrics;
+  const statusLabels: Record<string, string> = {
+    AWAITING_COMMANDER_APPROVAL: "等待指揮官核准",
+    EXECUTING_APPROVED_PLAN: "執行核准方案",
+    VERIFYING_RESPONSE: "驗證處置成效",
+    EFFECTIVE_MONITORING: "成效達標，持續監測",
+    REPLAN_REQUIRED: "未達標，重新規劃",
+    REPLAN_AWAITING_APPROVAL: "新方案等待核准",
+    FIELD_CONFIRMATION_REQUIRED: "模擬已恢復，等待現場確認",
+    RESOLVED: "事件閉環完成",
+  };
+  return (
+    <section className={`closed-loop-card loop-${loop.status.toLowerCase()}`}>
+      <div className="cl-head">
+        <div><small>閉環 Coordinator</small><b>{statusLabels[loop.status] ?? loop.status}</b></div>
+        <span>第 {loop.cycle_count} 輪</span>
+      </div>
+      <div className="cl-flow" aria-label="閉環控制流程">
+        <span>感知</span><i>→</i><span>規劃</span><i>→</i><span>核准</span><i>→</i><span>執行</span><i>→</i><span>驗證</span><i>↻</i>
+      </div>
+      {metrics && (
+        <div className="cl-metrics">
+          {metrics.metric_type === "traffic" ? <>
+            <div><small>飽和度改善</small><b>{Number(metrics.saturation_reduction ?? 0).toFixed(2)}</b></div>
+            <div><small>速度改善</small><b>{Number(metrics.speed_gain_kmh ?? 0).toFixed(1)} km/h</b></div>
+          </> : <div><small>人流下降</small><b>{Math.round(Number(metrics.crowd_reduction_ratio ?? 0) * 100)}%</b></div>}
+          <div><small>處置進度</small><b>{Math.round(Number(metrics.mitigation_progress ?? 0) * 100)}%</b></div>
+        </div>
+      )}
+      <div className="cl-foot">
+        <span>下次檢核 {loop.next_review_at.slice(11, 16)}</span>
+        <span>已重規劃 {loop.replan_count} 次</span>
+        {loop.pending_human_gate && <strong>需人工閘門</strong>}
+      </div>
+      <p>Coordinator 自動監測、驗證與重規劃；號誌、分流、派遣及對外通知仍需一次明確核准。</p>
+    </section>
   );
 }
 

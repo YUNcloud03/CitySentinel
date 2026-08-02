@@ -514,7 +514,7 @@ export default function Cockpit(p: Props) {
                     onDecisionAccepted={p.onDecisionAccepted} />
                 : <p className="dim">從「事件」Tab 注入事件後，此處顯示 Coordinator 建議、疏散方案與資源調度。</p>
             )}
-            {tab === "rescue" && <GreenCorridorPanel view={p.view} result={corridor} onResult={setCorridor} />}
+            {tab === "rescue" && <GreenCorridorPanel view={p.view} incident={p.incident} result={corridor} onResult={setCorridor} />}
             {tab === "sandbox" && <DecisionSandbox selectedSegmentId={selectedSegment} view={p.view} onPreview={setPreview} />}
             {tab === "notify" && <NotificationLifecyclePanel refreshKey={p.resourceKey} />}
             {tab === "evidence" && <EvidenceTab incident={p.incident} />}

@@ -3,7 +3,7 @@ import { api, type IncidentState, type SimView, type ValidationSlaMeasurement } 
 import Cockpit from "./Cockpit";
 import RecommendationView from "./RecommendationView";
 import GlobeIntro from "./GlobeIntro";
-import { AdvisorChatView, CitizenView, MonitorView, VerifyView } from "./views";
+import { AdvisorChatView, CitizenView, EmergencyModal, MonitorView, VerifyView } from "./views";
 
 const TICK_MS = 2500; // 前端節奏：2.5 秒推進一個資料時間點
 
@@ -31,6 +31,7 @@ export default function App() {
   const [validationSla, setValidationSla] = useState<ValidationSlaMeasurement | null>(null);
   const [acknowledgedIncidents, setAcknowledgedIncidents] = useState<Set<string>>(() => new Set());
   const playingRef = useRef(false);
+  const pollingRef = useRef(false);
   const validationStartedRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -64,10 +65,17 @@ export default function App() {
 
   useEffect(() => {
     const timer = setInterval(async () => {
+      if (pollingRef.current) return;
+      pollingRef.current = true;
       try {
         const v = playingRef.current ? await api.simTick() : await api.simState();
         setView(v);
+        const activeIncidentId = v.coordinator_cycle?.incident_id;
+        if (playingRef.current && activeIncidentId) {
+          setIncident(await api.incidentState(activeIncidentId));
+        }
       } catch { /* 後端未啟動時靜默 */ }
+      finally { pollingRef.current = false; }
     }, TICK_MS);
     return () => clearInterval(timer);
   }, []);
@@ -161,7 +169,11 @@ export default function App() {
     const nextView = await api.simStart(2);
     playingRef.current = true;
     setView(nextView);
-  }, []);
+    if (incident) {
+      setIncident(await api.incidentState(incident.incident_id));
+      setResourceKey((k) => k + 1);
+    }
+  }, [incident]);
 
   const seekTo = useCallback(async (ts: string) => {
     setView(await api.simSeek(ts));
@@ -195,6 +207,8 @@ export default function App() {
           )}
         </div>
       </header>
+
+      <EmergencyModal key={simulationGeneration} view={view} />
 
       {page === "command" && (
         <Cockpit

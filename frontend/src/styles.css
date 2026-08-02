@@ -419,6 +419,8 @@ td { padding: 3px 4px; border-top: 1px solid var(--border); font-size: 12px; }
 }
 .map-legend .sw { display: inline-block; width: 16px; height: 4px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
 .map-legend .sw.corridor { background: #00f5a0; box-shadow: 0 0 8px rgba(0,245,160,.75); }
+.map-legend .sw.corridor-to-scene { background: #23b5ff; box-shadow: 0 0 8px rgba(35,181,255,.75); }
+.map-legend .sw.corridor-to-hospital { background: #00f5a0; box-shadow: 0 0 8px rgba(0,245,160,.75); }
 .map-legend .note { color: var(--dim); }
 .asset-layer-control {
   position: absolute; left: 12px; bottom: 48px; z-index: 7;
@@ -466,6 +468,7 @@ td { padding: 3px 4px; border-top: 1px solid var(--border); font-size: 12px; }
   font: 800 15px/20px system-ui; cursor: pointer;
 }
 .hospital-map-marker:hover, .hospital-map-marker:focus-visible { transform: scale(1.14); box-shadow: 0 0 0 5px rgba(215,47,58,.28), 0 4px 12px rgba(0,0,0,.8); }
+.hospital-map-marker.mission-selected { box-shadow: 0 0 0 5px rgba(0,245,160,.24), 0 0 18px rgba(0,245,160,.7); }
 .hospital-map-marker[hidden] { display: none; }
 .risk-mini {
   width: 28px; color: #75bfff; font: normal 700 27px/26px system-ui; text-align: center;
@@ -691,6 +694,21 @@ td { padding: 3px 4px; border-top: 1px solid var(--border); font-size: 12px; }
 .gc-approved-proof {
   padding: 7px 9px; border-radius: 7px; background: rgba(0,245,160,.06); color: #79dbb2; font-size: 9.5px;
 }
+.gc-auto-mission { display: grid; gap: 5px; padding: 10px; margin: 8px 0; border: 1px solid rgba(35,181,255,.34); border-radius: 9px; background: rgba(35,181,255,.07); }
+.gc-auto-mission .chip { justify-self: start; }
+.gc-auto-mission b { color: #fff; font-size: 13px; }
+.gc-auto-mission small { color: var(--dim); line-height: 1.45; }
+.gc-mission-assignment { display: grid; grid-template-columns: 1fr .8fr 1fr; gap: 6px; margin: 8px 0; }
+.gc-mission-assignment > div { min-width: 0; padding: 8px; border-radius: 8px; background: var(--panel-2); }
+.gc-mission-assignment small { display: block; color: var(--dim); font-size: 9px; }
+.gc-mission-assignment b { display: block; margin-top: 3px; color: #fff; font-size: 10px; overflow-wrap: anywhere; }
+.gc-phase { display: block; margin-bottom: 7px; padding: 7px 9px; border-radius: 7px; background: rgba(35,181,255,.1); color: #8bd8ff; }
+.gc-mission-leg { margin-top: 8px; padding: 9px; border: 1px solid rgba(35,181,255,.26); border-radius: 9px; background: rgba(35,181,255,.035); }
+.gc-mission-leg.to_hospital { border-color: rgba(0,245,160,.28); background: rgba(0,245,160,.035); }
+.gc-leg-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 3px; }
+.gc-leg-head b { color: #8bd8ff; }
+.gc-mission-leg.to_hospital .gc-leg-head b { color: #79f5c5; }
+.gc-leg-head span, .gc-mission-leg > small { color: var(--dim); font-size: 9px; }
 .gc-traffic-snapshot {
   display: flex; align-items: center; gap: 7px; padding: 7px 8px;
   border: 1px solid rgba(117,191,255,.2); border-radius: 7px; color: var(--dim); font-size: 9px;
@@ -794,6 +812,28 @@ td { padding: 3px 4px; border-top: 1px solid var(--border); font-size: 12px; }
 .custom-event-actions button { width: 100%; }
 .incident-detail { margin-top: 10px; max-height: 520px; overflow-y: auto; }
 .incident-detail .desc { color: var(--dim); margin: 6px 0; font-size: 12px; }
+.closed-loop-card {
+  margin: 9px 0 12px; padding: 11px; border: 1px solid rgba(0, 208, 255, .38);
+  border-radius: 10px; background: linear-gradient(135deg, rgba(0,122,252,.12), rgba(20,255,176,.05));
+}
+.cl-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.cl-head > div { display: grid; gap: 2px; }
+.cl-head small { color: #7fb8ff; font-size: 10.5px; letter-spacing: .06em; }
+.cl-head b { color: #f5fbff; font-size: 14px; }
+.cl-head > span { padding: 3px 8px; border-radius: 12px; background: rgba(0,122,252,.18); color: #9fd0ff; font-size: 10.5px; }
+.cl-flow { display: flex; align-items: center; justify-content: space-between; gap: 3px; margin: 10px 0; }
+.cl-flow span { padding: 4px 6px; border: 1px solid rgba(127,184,255,.3); border-radius: 6px; color: #d9edff; font-size: 10.5px; }
+.cl-flow i { color: var(--green); font-style: normal; }
+.cl-metrics { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 5px; }
+.cl-metrics > div { display: grid; gap: 2px; padding: 7px; border-radius: 7px; background: rgba(4,10,18,.55); }
+.cl-metrics small { color: var(--slate); font-size: 9.5px; }
+.cl-metrics b { color: #5fffc1; font-size: 12px; }
+.cl-foot { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; color: var(--dim); font-size: 10px; }
+.cl-foot strong { color: var(--amber); }
+.closed-loop-card > p { margin: 7px 0 0; color: var(--slate); font-size: 10px; line-height: 1.45; }
+.closed-loop-card.loop-replan_required,
+.closed-loop-card.loop-replan_awaiting_approval { border-color: rgba(245,166,35,.6); }
+.closed-loop-card.loop-field_confirmation_required { border-color: rgba(47,191,113,.65); }
 .route { padding: 5px 8px; border-radius: 6px; margin: 4px 0; font-size: 12.5px; }
 .route.primary { background: rgba(0,122,252,0.12); border: 1px solid var(--cyan); }
 .route.secondary { background: var(--panel-2); border: 1px dashed var(--border); }

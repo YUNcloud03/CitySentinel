@@ -116,6 +116,7 @@ function fitIncidentFocus(
 }
 
 type HospitalFeature = {
+  id: string;
   properties: { name: string; address: string; source: string; source_url?: string };
   geometry: { type: "Point"; coordinates: [number, number] };
 };
@@ -264,12 +265,23 @@ function incidentGeoJSON(incident: IncidentState | null) {
 }
 
 function corridorGeoJSON(greenCorridor?: GreenCorridorResult | null) {
+  const missionLegs = greenCorridor?.mission?.legs ?? [];
   return {
     type: "FeatureCollection" as const,
-    features: greenCorridor?.route_geometry?.length
+    features: missionLegs.length
+      ? missionLegs.map((leg) => ({
+          type: "Feature" as const,
+          properties: {
+            approved: greenCorridor?.approval_status === "APPROVED_FOR_SIMULATION",
+            leg_id: leg.leg_id,
+            label: leg.label,
+          },
+          geometry: { type: "LineString" as const, coordinates: leg.route_geometry },
+        }))
+      : greenCorridor?.route_geometry?.length
       ? [{
           type: "Feature" as const,
-          properties: { approved: greenCorridor.approval_status === "APPROVED_FOR_SIMULATION" },
+          properties: { approved: greenCorridor.approval_status === "APPROVED_FOR_SIMULATION", leg_id: "SINGLE_LEG" },
           geometry: { type: "LineString" as const, coordinates: greenCorridor.route_geometry },
         }]
       : [],
@@ -308,7 +320,7 @@ export default function MapView({
   const markerIncidentRef = useRef<string | null>(null);
   const ambulanceMarkerRef = useRef<maplibregl.Marker | null>(null);
   const signalMarkersRef = useRef<{ marker: maplibregl.Marker; element: HTMLButtonElement; offset: number; deviceId: string; segmentId: string }[]>([]);
-  const hospitalMarkersRef = useRef<{ marker: maplibregl.Marker; element: HTMLButtonElement }[]>([]);
+  const hospitalMarkersRef = useRef<{ marker: maplibregl.Marker; element: HTMLButtonElement; hospitalId: string }[]>([]);
   const renderedIncidentRef = useRef<string | null>(null);
   const scenarioRenderedCallbackRef = useRef(onScenarioRendered);
   scenarioRenderedCallbackRef.current = onScenarioRendered;
@@ -334,6 +346,21 @@ export default function MapView({
   const assetLayersRef = useRef(assetLayers);
   assetLayersRef.current = assetLayers;
   const [signalCount, setSignalCount] = useState(0);
+
+  useEffect(() => {
+    if (!greenCorridor?.mission) return;
+    // 建立或核准雙程任務時直接帶使用者進入救援圖層；後續仍可手動切換。
+    setRoadViewMode(incident ? "event" : "all");
+    const coordinates = greenCorridor.mission.legs.flatMap((leg) => leg.route_geometry);
+    const map = mapRef.current;
+    if (map && coordinates.length > 1) {
+      const bounds = coordinates.reduce(
+        (result, coordinate) => result.extend(coordinate),
+        new maplibregl.LngLatBounds(coordinates[0], coordinates[0]),
+      );
+      map.fitBounds(bounds, { padding: 70, maxZoom: 14.8, duration: 600 });
+    }
+  }, [greenCorridor?.scenario_id, greenCorridor?.approval_status, incident?.incident_id]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -507,9 +534,10 @@ export default function MapView({
         source: "corridor-route",
         layout: { "line-cap": "round", "line-join": "round" },
         paint: {
-          "line-width": 15,
-          "line-color": ["case", ["==", ["get", "approved"], true], "#00f5a0", "#f5a623"],
-          "line-opacity": 0.18,
+          "line-width": 12,
+          "line-color": ["match", ["get", "leg_id"], "TO_SCENE", "#23b5ff", "TO_HOSPITAL", "#00f5a0", "#f5a623"],
+          "line-offset": ["match", ["get", "leg_id"], "TO_SCENE", -7, "TO_HOSPITAL", 7, 0],
+          "line-opacity": 0.24,
         },
       });
       map.addLayer({
@@ -518,14 +546,61 @@ export default function MapView({
         source: "corridor-route",
         filter: ["==", ["get", "approved"], true],
         layout: { "line-cap": "round", "line-join": "round" },
-        paint: { "line-width": 6, "line-color": "#00f5a0", "line-opacity": 0.98 },
+        paint: {
+          "line-width": 6,
+          "line-color": ["match", ["get", "leg_id"], "TO_SCENE", "#23b5ff", "TO_HOSPITAL", "#00f5a0", "#00f5a0"],
+          "line-opacity": 0.98,
+          "line-offset": ["match", ["get", "leg_id"], "TO_SCENE", -7, "TO_HOSPITAL", 7, 0],
+        },
       });
       map.addLayer({
         id: "green-corridor-proposal",
         type: "line",
         source: "corridor-route",
         filter: ["==", ["get", "approved"], false],
-        paint: { "line-width": 5, "line-color": "#f5a623", "line-opacity": 0.9, "line-dasharray": [2, 1.5] },
+        paint: {
+          "line-width": 5,
+          "line-color": ["match", ["get", "leg_id"], "TO_SCENE", "#23b5ff", "TO_HOSPITAL", "#00f5a0", "#f5a623"],
+          "line-opacity": 0.9,
+          "line-dasharray": [2, 1.5],
+          "line-offset": ["match", ["get", "leg_id"], "TO_SCENE", -7, "TO_HOSPITAL", 7, 0],
+        },
+      });
+      map.addLayer({
+        id: "green-corridor-to-scene-arrows",
+        type: "symbol",
+        source: "corridor-route",
+        filter: ["==", ["get", "leg_id"], "TO_SCENE"],
+        layout: {
+          "symbol-placement": "line",
+          "symbol-spacing": 52,
+          "text-field": "▶",
+          "text-size": 22,
+          "text-offset": [0, -1.05],
+          "text-rotation-alignment": "map",
+          "text-keep-upright": false,
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: { "text-color": "#b8ebff", "text-halo-color": "#06131d", "text-halo-width": 2.5 },
+      });
+      map.addLayer({
+        id: "green-corridor-to-hospital-arrows",
+        type: "symbol",
+        source: "corridor-route",
+        filter: ["==", ["get", "leg_id"], "TO_HOSPITAL"],
+        layout: {
+          "symbol-placement": "line",
+          "symbol-spacing": 52,
+          "text-field": "▶",
+          "text-size": 22,
+          "text-offset": [0, 1.05],
+          "text-rotation-alignment": "map",
+          "text-keep-upright": false,
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: { "text-color": "#a2ffd9", "text-halo-color": "#061710", "text-halo-width": 2.5 },
       });
       map.addLayer({
         id: "green-corridor-blocked",
@@ -684,7 +759,7 @@ export default function MapView({
                 `<b>${escapeHtml(name)}</b><br/>${escapeHtml(address)}<br/>點位來源：${escapeHtml(source)}${sourceLink}`
               ))
               .addTo(map);
-            return { marker, element };
+            return { marker, element, hospitalId: hospital.id };
           });
         })
         .catch((error) => {
@@ -854,10 +929,16 @@ export default function MapView({
           .setLngLat(vehiclePosition)
           .addTo(map);
       }
-      const nextLabel = runtime.next_intersection_id ?? "目的地";
-      const statusLabel = runtime.completed ? "已抵達" : `前往 ${nextLabel}`;
+      const nextLabel = (runtime as any).next_intersection_name ?? runtime.next_intersection_id ?? "目的地";
+      const missionPhase = runtime.mission_phase;
+      const statusLabel = runtime.completed ? "已送達收治醫院"
+        : missionPhase === "TO_SCENE" ? "前往事故現場"
+          : missionPhase === "ON_SCENE" ? "現場救護處置"
+            : missionPhase === "TO_HOSPITAL" ? "載送傷患至醫院"
+              : `前往 ${nextLabel}`;
       const nextSignal = greenCorridor.signal_actions.find(
-        (action) => action.intersection_id === runtime.next_intersection_id
+        (action: any) => action.execution_id === runtime.next_intersection_id
+          || action.intersection_id === runtime.next_intersection_id
       );
       const nextDistance = nextSignal ? distanceMeters(vehiclePosition, nextSignal.coordinates) : null;
       ambulanceMarkerRef.current
@@ -941,7 +1022,8 @@ export default function MapView({
     const responseLayers = [
       "incident-impact-fill", "incident-impact-line", "event-related-glow",
       "incident-projection-outline", "green-corridor-glow", "green-corridor-route",
-      "green-corridor-proposal", "green-corridor-blocked", "roads-closed",
+      "green-corridor-proposal", "green-corridor-to-scene-arrows",
+      "green-corridor-to-hospital-arrows", "green-corridor-blocked", "roads-closed",
       "evac-primary", "evac-secondary",
     ];
     responseLayers.forEach((id) => {
@@ -953,16 +1035,25 @@ export default function MapView({
       routing?.primary_route?.segment_id,
       ...(routing?.secondary_routes ?? []).map((route: any) => route.segment_id),
     ].filter(Boolean));
+    const corridorSegmentIds = new Set(greenCorridor?.signal_actions.map((action) => action.segment_id) ?? []);
     signalMarkersRef.current.forEach(({ element, segmentId }) => {
       element.hidden = !(
         (showAll && assetLayers.signals)
-        || (showEvent && eventRelatedIds.has(segmentId))
+        || (showEvent && (eventRelatedIds.has(segmentId) || corridorSegmentIds.has(segmentId)))
       );
     });
-    hospitalMarkersRef.current.forEach(({ element }) => { element.hidden = !(showAll && assetLayers.hospitals); });
+    const selectedHospitalIds = new Set([
+      greenCorridor?.mission?.dispatch_hospital.hospital_id,
+      greenCorridor?.mission?.receiving_hospital.hospital_id,
+    ].filter(Boolean));
+    hospitalMarkersRef.current.forEach(({ element, hospitalId }) => {
+      const missionSelected = selectedHospitalIds.has(hospitalId);
+      element.hidden = !((showAll && assetLayers.hospitals) || missionSelected);
+      element.classList.toggle("mission-selected", missionSelected);
+    });
     if (markerRef.current) markerRef.current.getElement().hidden = roadViewMode === "basic";
     if (ambulanceMarkerRef.current) ambulanceMarkerRef.current.getElement().hidden = roadViewMode === "basic";
-  }, [assetLayers, incident, view?.simulation_context?.dynamic_routing, roadViewMode]);
+  }, [assetLayers, incident, view?.simulation_context?.dynamic_routing, roadViewMode, greenCorridor?.scenario_id, greenCorridor?.approval_status]);
 
   const toggleAssetLayer = (layer: AssetLayer) => {
     setAssetLayers((current) => ({ ...current, [layer]: !current[layer] }));
@@ -1091,7 +1182,10 @@ export default function MapView({
         {isRoadIncident && <><span><i className="sw" style={{ background: "#007afc" }} /> 主疏導</span>
         <span><i className="sw dashed" style={{ background: "#d5dae2" }} /> 備援</span>
         <span><i className="sw" style={{ background: "#8c2f33" }} /> 事故</span></>}
-        {greenCorridor && <span><i className="sw corridor" /> 救援綠廊</span>}
+        {greenCorridor?.mission ? <>
+          <span><i className="sw corridor-to-scene" /> 藍：醫院→現場</span>
+          <span><i className="sw corridor-to-hospital" /> 綠：現場→醫院</span>
+        </> : greenCorridor && <span><i className="sw corridor" /> 救援綠廊</span>}
       </div>
     </div>
   );
