@@ -1,0 +1,7 @@
+# 官方命題資料為 authoritative source，必須位元組級不可變。
+# 任何行尾轉換都會改變 SHA256，破壞 /api/provenance 的跨平台可驗證性。
+data/raw/** -text
+
+# 前端地圖資產同理（已納入 provenance 與測試斷言）
+frontend/public/data/*.geojson -text
+frontend/src/data/roads.json   -text
