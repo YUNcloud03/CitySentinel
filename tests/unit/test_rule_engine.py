@@ -48,6 +48,20 @@ def test_bl17_growth_031_triggers_rule_3():
     assert 3 in {t["rule_id"] for t in triggers}
 
 
+def test_generic_station_growth_050_triggers_crowd_policy():
+    rec = _crowd(bs_id="BS_XY_ATT", user_count=18_000, growth_rate=0.50)
+    triggers = rule_engine.evaluate_crowd({rec.bs_id: rec}, [rec], AT)
+    trigger = next(t for t in triggers if t["rule_id"] == 3)
+    assert trigger["entity_id"] == "BS_XY_ATT"
+    assert trigger["evidence"]["policy_code"] == "CROWD_GROWTH_5M_50"
+
+
+def test_generic_station_growth_below_050_stays_monitoring():
+    rec = _crowd(bs_id="BS_XY_ATT", user_count=18_000, growth_rate=0.49)
+    triggers = rule_engine.evaluate_crowd({rec.bs_id: rec}, [rec], AT)
+    assert 3 not in {t["rule_id"] for t in triggers}
+
+
 # SOP 4：大巨蛋散場（峰值 + 負成長需同時成立）
 
 def test_dome_dispersal_requires_both_conditions():

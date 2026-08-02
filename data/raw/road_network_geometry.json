@@ -3,7 +3,7 @@
     "segment_id": "RD_TPE_001",
     "name": "忠孝東路四段",
     "flow_direction": "東西向",
-    "intersections": ["光復南路", "延吉街", "基隆路一段"],
+    "intersections": ["延吉街", "光復南路", "基隆路一段"],
     "capacity_vph": 3000,
     "alternatives": ["RD_TPE_004", "RD_TPE_005", "RD_TPE_007"],
     "nearby_stations": ["BS_TPE_DOME", "BS_MRT_BL17", "BS_MRT_BL16", "BS_MRT_BL18"]
@@ -93,7 +93,7 @@
     "segment_id": "RD_TPE_011",
     "name": "松壽路",
     "flow_direction": "東西向",
-    "intersections": ["基隆路一段", "松智路", "市府路"],
+    "intersections": ["基隆路一段", "市府路", "松智路"],
     "capacity_vph": 1500,
     "alternatives": ["RD_TPE_007", "RD_TPE_010"],
     "nearby_stations": ["BS_XY_VIESHOW", "BS_XY_ATT"]
@@ -111,7 +111,7 @@
     "segment_id": "RD_TPE_013",
     "name": "信義路五段",
     "flow_direction": "東西向",
-    "intersections": ["基隆路一段", "松智路", "市府路"],
+    "intersections": ["基隆路一段", "市府路", "松智路"],
     "capacity_vph": 3800,
     "alternatives": ["RD_TPE_005"],
     "nearby_stations": ["BS_TPE_101"]

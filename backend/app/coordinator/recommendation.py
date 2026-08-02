@@ -38,6 +38,22 @@ _AGENCY_KEYWORDS = (
     ("警察", "警察局交通警察大隊"),
 )
 
+_RESOURCE_AGENCIES = {
+    "Police": "警察局交通警察大隊",
+    "Shuttle": "臺北市公共運輸處",
+    "MRTLiaison": "臺北捷運公司行控中心",
+    "SignalControl": "臺北市交通管制工程處",
+    "SignalMaintenance": "臺北市交通管制工程處",
+}
+
+_COORDINATION_STATUS = {
+    "proposed": ("待指揮官核准", "READY_FOR_APPROVAL"),
+    "accepted": ("已授權進入模擬", "AUTHORIZED_FOR_SIMULATION"),
+    "adjusted": ("人工調整後已授權", "ADJUSTED_AND_AUTHORIZED"),
+    "rejected": ("指揮官已拒絕", "REJECTED"),
+    "shortfall": ("資源不足，待升級調度", "RESOURCE_SHORTFALL"),
+}
+
 # 號誌調整相關動作的關鍵詞
 _SIGNAL_KEYWORDS = ("綠燈", "配時", "號誌", "時制")
 
@@ -205,20 +221,31 @@ def _interagency(state: dict) -> dict:
                 "request": action,
                 "rule_id": rule_id,
                 "rule_label": _rule_label(rule_id),
+                "status": "規則建議，尚未形成外部派令",
+                "status_code": "RULE_RECOMMENDATION_ONLY",
+                "execution_mode": "simulation_adapter",
             })
 
-    # 資源調度中的警力請求：帶實際核配數量與缺口，較規則動作具體
+    # 資源調度是可核准的具體聯動請求；仍是模擬 Adapter，不宣稱已送真實外部系統。
     for act in (state.get("dispatch") or {}).get("actions") or []:
-        if act.get("resource_type") != "Police":
+        agency = _RESOURCE_AGENCIES.get(act.get("resource_type"))
+        if agency is None:
             continue
+        status, status_code = _COORDINATION_STATUS.get(
+            act.get("status"), (act.get("status") or "未知", "UNKNOWN")
+        )
         requests.append({
-            "agency": "警察局交通警察大隊",
+            "agency": agency,
             "request": act.get("action"),
+            "action_id": act.get("action_id"),
             "requested_count": act.get("requested_count"),
             "fulfilled_count": act.get("fulfilled_count"),
             "gap": act.get("gap"),
             "rule_id": act.get("rule_id"),
             "rule_label": _rule_label(act.get("rule_id")),
+            "status": status,
+            "status_code": status_code,
+            "execution_mode": "simulation_adapter",
         })
 
     return {
@@ -228,6 +255,8 @@ def _interagency(state: dict) -> dict:
             + " 已觸發，須一併提出跨系統請求"
         ) if required else "未觸發第 3 條或第 5 條，無強制跨系統請求",
         "requests": requests,
+        "external_system_connected": False,
+        "execution_disclaimer": "依本次事件動態產生並隨核准狀態更新；目前僅寫入模擬聯動 Adapter，尚未串接真實外部派令 API。",
         # 資源缺口需指揮官裁示抽調，於建議書中一併列示
         "resource_gaps": (state.get("dispatch") or {}).get("gaps") or [],
     }

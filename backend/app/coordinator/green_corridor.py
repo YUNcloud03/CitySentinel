@@ -14,6 +14,7 @@ from pathlib import Path
 
 from ..config import PROJECT_ROOT
 from ..data_loader import format_ts, parse_ts
+from ..simulation.incident_effects import project_incident
 from .coordinator import DataBundle
 
 
@@ -27,6 +28,7 @@ SIGNAL_RESTORE_BUFFER_SECONDS = 12
 PEDESTRIAN_CLEARANCE_SECONDS = 8
 MIN_CORRIDOR_SPEED_KMH = 32.0
 MAX_CORRIDOR_SPEED_KMH = 50.0
+SATURATION_ROUTE_PENALTY = 1.6
 
 
 def _distance_m(start: tuple[float, float], end: tuple[float, float]) -> float:
@@ -73,6 +75,109 @@ def _point_progress(
             best_progress = (travelled + lengths[index] * t) / total
         travelled += lengths[index]
     return best_progress
+
+
+def _closest_coordinate_pair(
+    first: list[list[float]], second: list[list[float]]
+) -> tuple[int, int]:
+    return min(
+        (
+            _distance_m(tuple(first_point), tuple(second_point)),
+            first_index,
+            second_index,
+        )
+        for first_index, first_point in enumerate(first)
+        for second_index, second_point in enumerate(second)
+    )[1:]
+
+
+def _route_coordinate_parts(
+    route_ids: list[str], roads: dict[str, dict]
+) -> dict[str, list[list[float]]]:
+    """Trim each road to the entry/exit junctions and orient it in travel order."""
+    if not route_ids:
+        return {}
+    junctions = [
+        _closest_coordinate_pair(
+            roads[first_id]["coordinates"], roads[second_id]["coordinates"]
+        )
+        for first_id, second_id in zip(route_ids, route_ids[1:])
+    ]
+    parts: dict[str, list[list[float]]] = {}
+    for route_index, segment_id in enumerate(route_ids):
+        coordinates = roads[segment_id]["coordinates"]
+        if len(route_ids) == 1:
+            entry_index, exit_index = 0, len(coordinates) - 1
+        elif route_index == 0:
+            exit_index = junctions[0][0]
+            distance_to_start = _line_length_m(coordinates[: exit_index + 1])
+            distance_to_end = _line_length_m(coordinates[exit_index:])
+            entry_index = 0 if distance_to_start >= distance_to_end else len(coordinates) - 1
+        elif route_index == len(route_ids) - 1:
+            entry_index = junctions[-1][1]
+            distance_to_start = _line_length_m(coordinates[: entry_index + 1])
+            distance_to_end = _line_length_m(coordinates[entry_index:])
+            exit_index = 0 if distance_to_start >= distance_to_end else len(coordinates) - 1
+        else:
+            entry_index = junctions[route_index - 1][1]
+            exit_index = junctions[route_index][0]
+        if entry_index <= exit_index:
+            part = coordinates[entry_index : exit_index + 1]
+        else:
+            part = list(reversed(coordinates[exit_index : entry_index + 1]))
+        parts[segment_id] = [list(point) for point in part]
+    return parts
+
+
+def _oriented_route_coordinates(route_ids: list[str], roads: dict[str, dict]) -> list[list[float]]:
+    parts = _route_coordinate_parts(route_ids, roads)
+    joined: list[list[float]] = []
+    for segment_id in route_ids:
+        for point in parts[segment_id]:
+            if not joined or point != joined[-1]:
+                joined.append(point)
+    return joined
+
+
+def _point_line_distance_m(point: tuple[float, float], coordinates: list[list[float]]) -> float:
+    if not coordinates:
+        return float("inf")
+    if len(coordinates) == 1:
+        return _distance_m(point, tuple(coordinates[0]))
+    latitude = math.radians(point[1])
+    scale_x, scale_y = 111_320 * math.cos(latitude), 110_540
+    px, py = point[0] * scale_x, point[1] * scale_y
+    best = float("inf")
+    for start, end in zip(coordinates, coordinates[1:]):
+        ax, ay = start[0] * scale_x, start[1] * scale_y
+        bx, by = end[0] * scale_x, end[1] * scale_y
+        dx, dy = bx - ax, by - ay
+        denominator = dx * dx + dy * dy
+        ratio = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / denominator)) if denominator else 0.0
+        best = min(best, math.hypot(px - (ax + ratio * dx), py - (ay + ratio * dy)))
+    return best
+
+
+def _point_at_fraction(coordinates: list[list[float]], fraction: float) -> list[float] | None:
+    if not coordinates:
+        return None
+    if len(coordinates) == 1:
+        return list(coordinates[0])
+    lengths = [_distance_m(tuple(a), tuple(b)) for a, b in zip(coordinates, coordinates[1:])]
+    total = sum(lengths)
+    target = _clamped_fraction(fraction) * total
+    travelled = 0.0
+    for length, start, end in zip(lengths, coordinates, coordinates[1:]):
+        if travelled + length >= target:
+            ratio = 0.0 if length == 0 else (target - travelled) / length
+            return [round(start[0] + (end[0] - start[0]) * ratio, 7),
+                    round(start[1] + (end[1] - start[1]) * ratio, 7)]
+        travelled += length
+    return list(coordinates[-1])
+
+
+def _clamped_fraction(value: float) -> float:
+    return max(0.0, min(1.0, value))
 
 
 @lru_cache(maxsize=1)
@@ -146,6 +251,9 @@ def _segment_metrics(bundle: DataBundle, snapshot) -> dict[str, dict]:
         signal_count = len(signals.get(segment_id, []))
         baseline_seconds = length_m / (speed / 3.6) + signal_count * BASE_SIGNAL_DELAY_SECONDS
         corridor_seconds = length_m / (corridor_speed / 3.6) + signal_count * CORRIDOR_SIGNAL_DELAY_SECONDS
+        congestion_multiplier = 1 + max(0.0, traffic["saturation_score"] - 0.5) * SATURATION_ROUTE_PENALTY
+        route_cost_seconds = baseline_seconds * congestion_multiplier
+        lane_status = str(traffic["lane_status"]).lower()
         result[segment_id] = {
             "segment_id": segment_id,
             "name": segment.name,
@@ -159,6 +267,9 @@ def _segment_metrics(bundle: DataBundle, snapshot) -> dict[str, dict]:
             "data_time": traffic["data_time"],
             "baseline_seconds": baseline_seconds,
             "corridor_seconds": corridor_seconds,
+            "congestion_multiplier": round(congestion_multiplier, 3),
+            "route_cost_seconds": round(route_cost_seconds, 2),
+            "impassable": "closed" in lane_status or "blocked" in lane_status,
         }
     return result
 
@@ -180,9 +291,11 @@ def _shortest_path(
         for neighbor in sorted(graph[current]):
             if neighbor in blocked or neighbor in path:
                 continue
+            if neighbor != destination and metrics[neighbor]["impassable"]:
+                continue
             heapq.heappush(
                 queue,
-                (cost + metrics[neighbor]["baseline_seconds"], neighbor, path),
+                (cost + metrics[neighbor]["route_cost_seconds"], neighbor, path),
             )
     raise ValueError("找不到避開封閉路段的連續救援路徑")
 
@@ -248,6 +361,13 @@ def corridor_state_at(plan: dict, elapsed_seconds: int, approved: bool | None = 
             "restore_at_seconds": restore,
         })
     total = max((row["restore_at_seconds"] for row in actions), default=0)
+    passage_total = max((row["passage_at_seconds"] for row in actions), default=total)
+    vehicle_fraction = _clamped_fraction(elapsed / max(1, passage_total)) if is_approved else 0.0
+    vehicle_position = _point_at_fraction(plan.get("route_geometry", []), vehicle_fraction)
+    next_intersection = next(
+        (row for row in states if row["state"] in {"PEDESTRIAN_CLEARANCE", "EMERGENCY_GREEN", "WAITING"}),
+        None,
+    )
     return {
         "elapsed_seconds": elapsed,
         "total_seconds": total,
@@ -255,6 +375,10 @@ def corridor_state_at(plan: dict, elapsed_seconds: int, approved: bool | None = 
         "current_intersection_id": current_intersection_id,
         "active_signal_device_ids": active_device_ids,
         "clearance_signal_device_ids": clearance_device_ids,
+        "vehicle_position": vehicle_position,
+        "vehicle_progress_pct": round(vehicle_fraction * 100, 1),
+        "vehicle_position_source": "simulated_from_route_geometry_and_corridor_elapsed_time",
+        "next_intersection_id": next_intersection["intersection_id"] if next_intersection else None,
         "intersection_states": states,
         "invariant": "different intersections emergency-green count <= 1",
     }
@@ -278,15 +402,48 @@ def simulate_green_corridor(bundle: DataBundle, scenario: dict) -> dict:
         raise ValueError("起點與目的路段不可設為封閉")
 
     snapshot = bundle.traffic_at(at)
+    incident_context = {"active": False}
+    if scenario.get("_incident_state"):
+        snapshot, incident_context = project_incident(
+            at=at,
+            baseline=snapshot,
+            incident_state=scenario["_incident_state"],
+            network=bundle.network,
+        )
     metrics = _segment_metrics(bundle, snapshot)
     route_ids = _shortest_path(_graph(bundle.network), metrics, origin, destination, blocked)
-    route_details = [metrics[segment_id] for segment_id in route_ids]
+    roads, signals = _map_assets()
+    route_parts = _route_coordinate_parts(route_ids, roads)
+    route_geometry = _oriented_route_coordinates(route_ids, roads)
+    route_signals: dict[str, list[dict]] = {}
+    route_details = []
+    for segment_id in route_ids:
+        part = route_parts[segment_id]
+        segment_signals = [
+            {
+                **signal,
+                "route_progress": _point_progress(tuple(signal["coordinates"]), part),
+            }
+            for signal in signals.get(segment_id, [])
+            if _point_line_distance_m(tuple(signal["coordinates"]), part) <= 80
+        ]
+        route_signals[segment_id] = segment_signals
+        base = metrics[segment_id]
+        length_m = _line_length_m(part)
+        baseline_seconds = length_m / (base["baseline_speed_kmh"] / 3.6) + len(segment_signals) * BASE_SIGNAL_DELAY_SECONDS
+        corridor_seconds = length_m / (base["corridor_speed_kmh"] / 3.6) + len(segment_signals) * CORRIDOR_SIGNAL_DELAY_SECONDS
+        route_details.append({
+            **base,
+            "length_m": round(length_m),
+            "signal_count": len(segment_signals),
+            "baseline_seconds": baseline_seconds,
+            "corridor_seconds": corridor_seconds,
+        })
     eta_before_seconds = sum(row["baseline_seconds"] for row in route_details)
     eta_after_seconds = sum(row["corridor_seconds"] for row in route_details)
     eta_before = max(1, round(eta_before_seconds / 60))
     eta_after = max(1, round(eta_after_seconds / 60))
 
-    roads, signals = _map_assets()
     signal_actions = []
     elapsed = 0.0
     previous_passage = 0
@@ -294,13 +451,13 @@ def simulate_green_corridor(bundle: DataBundle, scenario: dict) -> dict:
         segment_id = row["segment_id"]
         segment_travel = row["length_m"] / (row["corridor_speed_kmh"] / 3.6)
         grouped_signals: dict[str, list[dict]] = {}
-        for signal in signals.get(segment_id, []):
+        for signal in route_signals.get(segment_id, []):
             intersection_id = signal.get("icid") or signal.get("group") or signal["device_id"]
             grouped_signals.setdefault(intersection_id, []).append(signal)
         for intersection_id, intersection_signals in sorted(
-            grouped_signals.items(), key=lambda item: min(signal["progress"] for signal in item[1])
+            grouped_signals.items(), key=lambda item: min(signal["route_progress"] for signal in item[1])
         ):
-            raw_passage = elapsed + segment_travel * min(signal["progress"] for signal in intersection_signals)
+            raw_passage = elapsed + segment_travel * min(signal["route_progress"] for signal in intersection_signals)
             prepare = max(previous_passage, round(raw_passage - SIGNAL_PREEMPT_LEAD_SECONDS))
             activate = prepare + PEDESTRIAN_CLEARANCE_SECONDS
             passage = max(round(raw_passage), activate + 1)
@@ -347,6 +504,7 @@ def simulate_green_corridor(bundle: DataBundle, scenario: dict) -> dict:
             for row in route_details
         ],
         "blocked_segment_ids": sorted(blocked),
+        "route_geometry": route_geometry,
         "eta": {
             "before_minutes": eta_before,
             "after_minutes": eta_after,
@@ -365,8 +523,12 @@ def simulate_green_corridor(bundle: DataBundle, scenario: dict) -> dict:
         "evidence": {
             "road_topology_source": "road_network_geometry.json",
             "geometry_source": "臺北市寬度超過8公尺道路 GIS 圖資",
+            "route_geometry_method": "trim_each_road_between_actual_entry_and_exit_junctions",
             "signal_source": "臺北市政府交通局路口時制號誌資料",
             "traffic_snapshot": format_ts(at),
+            "traffic_source": "incident_projection" if incident_context.get("active") else "organizer_snapshot",
+            "incident_id": incident_context.get("incident_id"),
+            "route_score_formula": "travel_time_seconds × (1 + max(0, saturation_score - 0.5) × 1.6)",
             "selected_signal_count": len(signal_actions),
             "estimated_segment_ids": [row["segment_id"] for row in route_details if row["source"] == "estimated_fallback"],
             "constants": {
@@ -375,6 +537,7 @@ def simulate_green_corridor(bundle: DataBundle, scenario: dict) -> dict:
                 "minimum_corridor_speed_kmh": MIN_CORRIDOR_SPEED_KMH,
                 "maximum_corridor_speed_kmh": MAX_CORRIDOR_SPEED_KMH,
                 "pedestrian_clearance_seconds": PEDESTRIAN_CLEARANCE_SECONDS,
+                "saturation_route_penalty": SATURATION_ROUTE_PENALTY,
             },
         },
         "decision_trace": [
@@ -385,7 +548,7 @@ def simulate_green_corridor(bundle: DataBundle, scenario: dict) -> dict:
             {"step": "ETA_RECALCULATED", "detail": {"before": eta_before, "after": eta_after}},
             {"step": "HUMAN_APPROVAL_REQUIRED", "detail": {"status": "READY_FOR_APPROVAL"}},
         ],
-        "model": "deterministic-green-corridor-v1",
+        "model": "deterministic-green-corridor-v2-traffic-weighted",
         "approval_status": "READY_FOR_APPROVAL",
         "production_state_modified": False,
         "limitations": "號誌燈相、救援車位置與 ETA 為決策沙盒推估；未連接真實車聯網或號誌控制器。",

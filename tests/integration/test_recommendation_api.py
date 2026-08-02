@@ -77,6 +77,22 @@ def test_section_5_interagency_requests(rec):
     # 警力請求須帶實際核配數量，供指揮官判斷缺口
     police = [r for r in inter["requests"] if r.get("requested_count") is not None]
     assert police and police[0]["fulfilled_count"] is not None
+    assert inter["external_system_connected"] is False
+    assert "模擬" in inter["execution_disclaimer"]
+    assert any(r.get("status_code") == "READY_FOR_APPROVAL" for r in inter["requests"])
+
+
+def test_interagency_status_follows_commander_approval(client):
+    state = client.post("/api/incidents/inject", json={"event_id": "TPE_2026_ACC_001"}).json()
+    action = state["dispatch"]["actions"][0]
+    approved = client.post(
+        f"/api/incidents/{state['incident_id']}/dispatch/{action['action_id']}",
+        json={"op": "accept", "operator": "test_commander", "simulation_time": state["as_of"]},
+    )
+    assert approved.status_code == 200
+    rec = client.get(f"/api/incidents/{state['incident_id']}/recommendation").json()
+    linked = next(row for row in rec["interagency"]["requests"] if row.get("action_id") == action["action_id"])
+    assert linked["status_code"] == "AUTHORIZED_FOR_SIMULATION"
 
 
 def test_recommendation_reflects_assumptions(client):

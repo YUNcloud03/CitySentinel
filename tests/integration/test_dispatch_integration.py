@@ -24,6 +24,19 @@ def test_acc_001_dispatches_police_and_signal(coordinator):
     assert police["challenge_question"]
     assert police["deterministic_result"]
     assert police["input_snapshot_id"].startswith("SNAP-")
+    assert police["allocation_state"] == "reserved"
+
+
+def test_accept_commits_reserved_resource_and_records_simulation_time(coordinator):
+    state = coordinator.inject_incident("TPE_2026_ACC_001")
+    action = state["dispatch"]["actions"][0]
+    coordinator.dispatch_action(
+        state["incident_id"], action["action_id"], "accept",
+        operator="cmdr_01", simulation_time="2026-05-20 22:10",
+    )
+    assert action["status"] == "accepted"
+    assert action["allocation_state"] == "committed"
+    assert action["accepted_sim_time"] == "2026-05-20 22:10"
 
 
 def test_acc_001_does_not_dispatch_mrt(coordinator):

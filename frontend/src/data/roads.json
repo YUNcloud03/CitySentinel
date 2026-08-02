@@ -13,6 +13,7 @@
       "id": "RD_TPE_001",
       "properties": {
         "segment_id": "RD_TPE_001",
+        "name": "忠孝東路四段",
         "source_road_names": [
           "忠孝東路四段"
         ],
@@ -114,6 +115,7 @@
       "id": "RD_TPE_002",
       "properties": {
         "segment_id": "RD_TPE_002",
+        "name": "光復南路",
         "source_road_names": [
           "光復南路"
         ],
@@ -180,6 +182,7 @@
       "id": "RD_TPE_003",
       "properties": {
         "segment_id": "RD_TPE_003",
+        "name": "基隆路一段",
         "source_road_names": [
           "基隆路一段",
           "基隆路二段"
@@ -237,6 +240,7 @@
       "id": "RD_TPE_004",
       "properties": {
         "segment_id": "RD_TPE_004",
+        "name": "市民大道四段",
         "source_road_names": [
           "市民大道四段"
         ],
@@ -313,13 +317,13 @@
       "id": "RD_TPE_005",
       "properties": {
         "segment_id": "RD_TPE_005",
+        "name": "仁愛路四段",
         "source_road_names": [
           "仁愛路四段"
         ],
         "source_road_ids": [
           "仁愛路四段-04",
           "仁愛路四段-05",
-          "仁愛路四段-06",
           "仁愛路四段-07",
           "仁愛路四段-08",
           "仁愛路四段-09",
@@ -344,10 +348,6 @@
           [
             121.5522241,
             25.037808
-          ],
-          [
-            121.552917,
-            25.0371197
           ],
           [
             121.5536202,
@@ -385,6 +385,7 @@
       "id": "RD_TPE_006",
       "properties": {
         "segment_id": "RD_TPE_006",
+        "name": "敦化南路一段",
         "source_road_names": [
           "敦化南路一段"
         ],
@@ -455,6 +456,7 @@
       "id": "RD_TPE_007",
       "properties": {
         "segment_id": "RD_TPE_007",
+        "name": "松高路",
         "source_road_names": [
           "松高路"
         ],
@@ -491,6 +493,7 @@
       "id": "RD_TPE_008",
       "properties": {
         "segment_id": "RD_TPE_008",
+        "name": "延吉街",
         "source_road_names": [
           "延吉街"
         ],
@@ -532,6 +535,7 @@
       "id": "RD_TPE_009",
       "properties": {
         "segment_id": "RD_TPE_009",
+        "name": "基隆路地下道",
         "source_road_names": [
           "基隆路一段"
         ],
@@ -584,6 +588,7 @@
       "id": "RD_TPE_010",
       "properties": {
         "segment_id": "RD_TPE_010",
+        "name": "市府路",
         "source_road_names": [
           "市府路"
         ],
@@ -624,6 +629,7 @@
       "id": "RD_TPE_011",
       "properties": {
         "segment_id": "RD_TPE_011",
+        "name": "松壽路",
         "source_road_names": [
           "松壽路"
         ],
@@ -665,6 +671,7 @@
       "id": "RD_TPE_012",
       "properties": {
         "segment_id": "RD_TPE_012",
+        "name": "敦化南路二段",
         "source_road_names": [
           "敦化南路二段"
         ],
@@ -727,6 +734,7 @@
       "id": "RD_TPE_013",
       "properties": {
         "segment_id": "RD_TPE_013",
+        "name": "信義路五段",
         "source_road_names": [
           "信義路五段"
         ],
@@ -779,6 +787,7 @@
       "id": "RD_TPE_014",
       "properties": {
         "segment_id": "RD_TPE_014",
+        "name": "松智路",
         "source_road_names": [
           "松智路"
         ],
@@ -834,6 +843,7 @@
       "id": "RD_TPE_015",
       "properties": {
         "segment_id": "RD_TPE_015",
+        "name": "復興南路一段",
         "source_road_names": [
           "復興南路一段"
         ],

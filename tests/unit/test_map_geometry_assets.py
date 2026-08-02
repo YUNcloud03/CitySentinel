@@ -19,6 +19,7 @@ def _distance_to_segment_m(point, start, end):
 
 
 def test_official_road_geometry_has_all_challenge_segments():
+    organizer = json.loads((ROOT / "data/raw/road_network_geometry.json").read_text(encoding="utf-8"))
     data = json.loads((ROOT / "frontend/src/data/roads.json").read_text(encoding="utf-8"))
     features = data["features"]
     assert len(features) == 15
@@ -27,6 +28,23 @@ def test_official_road_geometry_has_all_challenge_segments():
     }
     assert data["metadata"]["source"] == "臺北市寬度超過8公尺道路GIS圖資"
     assert all(len(feature["geometry"]["coordinates"]) >= 2 for feature in features)
+    assert {
+        feature["properties"]["segment_id"]: feature["properties"]["name"]
+        for feature in features
+    } == {row["segment_id"]: row["name"] for row in organizer}
+
+
+def test_official_road_geometry_bounds_include_all_complete_sections():
+    data = json.loads((ROOT / "frontend/src/data/roads.json").read_text(encoding="utf-8"))
+    points = [
+        point for feature in data["features"]
+        for point in feature["geometry"]["coordinates"]
+    ]
+    bounds = (
+        min(point[0] for point in points), min(point[1] for point in points),
+        max(point[0] for point in points), max(point[1] for point in points),
+    )
+    assert bounds == (121.543766, 25.0220692, 121.5690999, 25.0486058)
 
 
 def test_keelung_junction_uses_official_signal_coordinate():
@@ -60,6 +78,17 @@ def test_dunhua_sections_use_the_complete_official_named_sections():
     assert [121.548802, 25.033249] in roads["RD_TPE_012"]
 
 
+def test_renai_centerline_excludes_off_axis_side_ramp_polygon():
+    data = json.loads((ROOT / "frontend/src/data/roads.json").read_text(encoding="utf-8"))
+    renai = next(
+        feature for feature in data["features"]
+        if feature["properties"]["segment_id"] == "RD_TPE_005"
+    )
+    coordinates = renai["geometry"]["coordinates"]
+    assert [121.552917, 25.0371197] not in coordinates
+    assert max(point[1] for point in coordinates) - min(point[1] for point in coordinates) < 0.00045
+
+
 def test_each_selected_signal_is_within_declared_corridor():
     roads_data = json.loads((ROOT / "frontend/src/data/roads.json").read_text(encoding="utf-8"))
     signals_data = json.loads((ROOT / "frontend/public/data/signals.geojson").read_text(encoding="utf-8"))
@@ -74,4 +103,4 @@ def test_each_selected_signal_is_within_declared_corridor():
             _distance_to_segment_m(point, coords[index], coords[index + 1])
             for index in range(len(coords) - 1)
         )
-        assert distance <= 75.1, (signal["properties"]["device_id"], distance)
+        assert distance <= 40.1, (signal["properties"]["device_id"], distance)

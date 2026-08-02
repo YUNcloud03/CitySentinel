@@ -83,10 +83,12 @@ def simulation_contract(bundle) -> dict:
             "deterministic": True,
             "randomness_used": False,
             "snapshot_sha256": replay_hash,
-            "scope": "dataset-driven traffic/crowd snapshots; audit timestamps excluded",
+            "scope": "dataset-driven baseline plus deterministic incident projection; audit timestamps excluded",
         },
         "update_equations": {
             "dataset_playback": "values are replaced only when a source row exists; otherwise prior value is retained",
+            "incident_projection": "deterministic-incident-v1: organizer baseline × documented severity/status/type coefficients; affected and diversion roads only",
+            "dynamic_routing": "re-evaluated for every scenario snapshot using projected saturation and organizer topology constraints",
             "congestion": "Normal < 0.85, B = 0.85..0.949, A >= 0.95",
             "decision_sandbox_model": "deterministic-v1; coefficients returned with each scenario result",
         },
@@ -97,10 +99,10 @@ def dataset_usage_report() -> list[dict]:
     return [
         {"file": "city_traffic_flow.csv", "status": "used", "functions": [
             "simulation traffic snapshots", "congestion classification", "routing exclusion",
-            "ETE saturation input", "decision sandbox baseline", "green-corridor ETA"],
+            "ETE saturation input", "incident projection baseline", "decision sandbox baseline", "green-corridor ETA"],
          "fields": ["Timestamp", "Segment_ID", "Road_Name", "Avg_Speed", "Vehicle_Count",
                     "Saturation_Score", "Lane_Status"],
-         "display_only_fields": ["Vehicle_Count"], "unused_fields": []},
+         "display_only_fields": [], "unused_fields": []},
         {"file": "signaling_crowd_density.csv", "status": "used", "functions": [
             "simulation crowd snapshots", "crowd anomaly rules", "confidence corroboration",
             "notification audience context", "what-if baseline"],
@@ -108,7 +110,7 @@ def dataset_usage_report() -> list[dict]:
                     "Growth_Rate", "Roaming_User_Pct"],
          "display_only_fields": [], "unused_fields": ["Stay_Time_Avg"]},
         {"file": "live_incidents.json", "status": "used", "functions": [
-            "event injection", "rule evaluation", "routing", "resource dispatch", "notifications"],
+            "event injection", "incident playback projection", "dynamic routing", "rule evaluation", "resource dispatch", "notifications"],
          "fields": ["event_id", "type", "location", "affected_segment", "affected_road", "status",
                     "severity", "description", "timestamp"], "display_only_fields": [], "unused_fields": []},
         {"file": "road_network_geometry.json", "status": "used", "functions": [

@@ -1,0 +1,24 @@
+{
+  "type": "FeatureCollection",
+  "metadata": {
+    "source": "臺北市政府衛生局－臺北市公私立醫療院所（醫院清冊）",
+    "source_url": "https://data.taipei/dataset/detail?id=ffdd5753-30db-4c38-b65f-b77892773d60",
+    "hospital_resource_updated": "2025-06-04",
+    "filter": "CitySentinel map vicinity; hospitals only, clinics excluded",
+    "crs": "EPSG:4326",
+    "note": "臺北市立聯合醫院仁愛院區座標另採臺北市交通局醫院行人通廊公開 GPS 點位"
+  },
+  "features": [
+    {"type":"Feature","id":"H_TPE_RENAI","properties":{"name":"臺北市立聯合醫院仁愛院區","address":"臺北市大安區仁愛路四段10號","source":"臺北市政府衛生局／交通局","source_url":"https://tpech.gov.taipei/mp109151/cp.aspx?n=BB0BB609A6813669"},"geometry":{"type":"Point","coordinates":[121.5458357,25.0372931]}},
+    {"type":"Feature","id":"H_TPE_CHUNGSHAN","properties":{"name":"中山醫療社團法人中山醫院","address":"臺北市大安區仁愛路四段112巷11號","source":"臺北市政府衛生局"},"geometry":{"type":"Point","coordinates":[121.5497106,25.03655173]}},
+    {"type":"Feature","id":"H_TPE_HONGEN","properties":{"name":"宏恩醫療財團法人宏恩綜合醫院","address":"臺北市大安區仁愛路四段71巷1號","source":"臺北市政府衛生局"},"geometry":{"type":"Point","coordinates":[121.5470295,25.03849645]}},
+    {"type":"Feature","id":"H_TPE_CENTER","properties":{"name":"中心診所醫療財團法人中心綜合醫院","address":"臺北市大安區忠孝東路四段77號","source":"臺北市政府衛生局"},"geometry":{"type":"Point","coordinates":[121.5473297,25.04186487]}},
+    {"type":"Feature","id":"H_TPE_CATHAY","properties":{"name":"國泰醫療財團法人國泰綜合醫院","address":"臺北市大安區仁愛路四段266巷6號、280號","source":"臺北市政府衛生局"},"geometry":{"type":"Point","coordinates":[121.5528014,25.03717848]}},
+    {"type":"Feature","id":"H_TPE_SHOWCHWAN","properties":{"name":"秀傳醫院","address":"臺北市大安區光復南路116巷1、3、5號","source":"臺北市政府衛生局"},"geometry":{"type":"Point","coordinates":[121.5568623,25.04311217]}},
+    {"type":"Feature","id":"H_TPE_ADVENTIST","properties":{"name":"基督復臨安息日會醫療財團法人臺安醫院","address":"臺北市松山區八德路二段424、426號","source":"臺北市政府衛生局"},"geometry":{"type":"Point","coordinates":[121.5444842,25.04758836]}},
+    {"type":"Feature","id":"H_TPE_BOJEN","properties":{"name":"博仁綜合醫院","address":"臺北市松山區光復北路66、68號","source":"臺北市政府衛生局"},"geometry":{"type":"Point","coordinates":[121.557695,25.04990354]}},
+    {"type":"Feature","id":"H_TPE_PEILING","properties":{"name":"培靈醫院","address":"臺北市松山區八德路四段355號","source":"臺北市政府衛生局"},"geometry":{"type":"Point","coordinates":[121.5682821,25.04940059]}},
+    {"type":"Feature","id":"H_TPE_CHANGGUNG","properties":{"name":"長庚醫療財團法人台北長庚紀念醫院","address":"臺北市松山區敦化北路199、197號","source":"臺北市政府衛生局"},"geometry":{"type":"Point","coordinates":[121.5485556,25.05023183]}},
+    {"type":"Feature","id":"H_TPE_TMUH","properties":{"name":"臺北醫學大學附設醫院","address":"臺北市信義區吳興街250、252號","source":"臺北市政府衛生局"},"geometry":{"type":"Point","coordinates":[121.5636377,25.02663801]}}
+  ]
+}

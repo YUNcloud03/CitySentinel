@@ -31,6 +31,11 @@ MRT_WALK_TARGET = "BS_MRT_BL18"
 MRT_GROWTH_THRESHOLD = 0.30
 MRT_USER_THRESHOLD = 25_000
 
+# 競賽需求中的可量化異常範例：任一單站人流 5 分鐘增幅 >= 50%。
+# 這是系統層級的通用人潮政策，不宣稱為主辦方 SOP 3 的原文門檻。
+GENERIC_CROWD_GROWTH_THRESHOLD = 0.50
+GENERIC_CROWD_POLICY_CODE = "CROWD_GROWTH_5M_50"
+
 # SOP 4
 DOME_STATION = "BS_TPE_DOME"
 DOME_PEAK_THRESHOLD = 30_000
@@ -121,6 +126,34 @@ def evaluate_crowd(
                     ],
                 }
             )
+
+    # 通用場站／場館人潮暴增政策。BL17 已由上方官方 SOP 3 判定，避免重複觸發。
+    for bs_id, rec in sorted(snapshot.items()):
+        if bs_id == MRT_STATION or rec.growth_rate < GENERIC_CROWD_GROWTH_THRESHOLD:
+            continue
+        triggers.append(
+            {
+                "rule_id": 3,
+                "entity_id": bs_id,
+                "evidence": {
+                    "user_count": rec.user_count,
+                    "growth_rate": rec.growth_rate,
+                    "growth_window_minutes": 5,
+                    "threshold": GENERIC_CROWD_GROWTH_THRESHOLD,
+                    "matched_conditions": [
+                        f"5-minute Growth_Rate {rec.growth_rate} >= {GENERIC_CROWD_GROWTH_THRESHOLD}"
+                    ],
+                    "policy_code": GENERIC_CROWD_POLICY_CODE,
+                    "policy_source": "Competition requirement: single-station 5-minute growth >= 50%",
+                    "timestamp": rec.timestamp,
+                },
+                "actions": [
+                    "啟動場站出入口單向分流與人潮管制",
+                    "配置警力維持緊急救援通道",
+                    "評估接駁或替代運輸疏運",
+                ],
+            }
+        )
 
     # SOP 4：大巨蛋歷史峰值 >= 30,000 且當前 Growth_Rate <= -0.20
     dome = snapshot.get(DOME_STATION)

@@ -44,6 +44,8 @@ def test_custom_incident_full_flow(client):
         "type": "Road_Collapse", "affected_segment": "RD_TPE_003",
         "status": "Closed", "severity": "High",
         "location": "基隆路一段", "description": "自訂模擬事件",
+        "affected_direction": "northbound", "lanes_total": 3, "lanes_closed": 3,
+        "review_interval_minutes": 15, "source_type": "operator", "human_confirmed": True,
         "timestamp": "2026-05-20 22:00",
     })
     assert res.status_code == 200
@@ -51,11 +53,25 @@ def test_custom_incident_full_flow(client):
     assert state["workflow_status"] == "completed"
     assert 2 in state["triggered_rules"]
     assert state["simulation_run_id"].startswith("SIMRUN-")
+    assert state["event"]["affected_direction"] == "northbound"
+    assert state["event"]["lanes_closed"] == 3
+    assert state["event"]["review_interval_minutes"] == 15
     # 事件會產生待核准的通報
     assert state["notification_id"].startswith("NOTI-")
 
     runs = client.get("/api/simulation-runs").json()
     assert any(r["simulation_run_id"] == state["simulation_run_id"] for r in runs)
+
+
+def test_custom_incident_rejects_more_closed_lanes_than_total(client):
+    res = client.post("/api/incidents/custom", json={
+        "type": "Traffic_Accident", "affected_segment": "RD_TPE_003",
+        "status": "Restricted", "severity": "High",
+        "lanes_total": 2, "lanes_closed": 3,
+        "timestamp": "2026-05-20 22:00",
+    })
+    assert res.status_code == 422
+    assert "封閉車道數" in res.json()["detail"]
 
 
 def test_notification_lifecycle_via_api(client):

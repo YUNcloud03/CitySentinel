@@ -63,7 +63,7 @@ LLM           →  模糊理解與文字生成（諮詢層，唯讀權限）
 
 | 特性 | 實作方式 |
 |---|---|
-| **可重現** | 相同輸入必得相同判定結果，105 項測試鎖定邊界條件 |
+| **可重現** | 相同輸入必得相同判定結果，171 項後端與 10 項前端測試鎖定邊界條件 |
 | **可驗證** | 決策鏈保留輸入快照、觸發條款、排除理由、公式明細；資料附 SHA256 |
 | **可質疑** | 每個調度動作附證據包與 Challenge 問題，可接受／調整／拒絕 |
 | **不中斷** | LLM 失效時自動降級為確定性模板，事件流程照常完成 |
@@ -167,7 +167,7 @@ python -m pytest tests -q
 | 工具 | 用途 |
 |---|---|
 | Git | 版本控制 |
-| pytest | 自動化測試（105 項） |
+| pytest | 後端自動化測試（171 項） |
 | TypeScript Compiler (`tsc --noEmit`) | 前端型別檢查 |
 | pptxgenjs 4.0.1 | 提案簡報產生器（`docs/build_deck.cjs`，非系統執行相依） |
 | LibreOffice | 簡報轉 PDF（文件產出用） |
@@ -245,11 +245,16 @@ python -m pytest tests -q
 3. 差異紀錄於 `data/DATA_NOTES.md`
 
 ```
-採用版 SHA256：
+現行採用版 SHA256（2026-08-02 主辦方更新版）：
+741D253538AAF2BB25C60DEC9D4A8E8DEFECC27112FA09C7A9F1512ADB286B18
+
+前一版 SHA256（僅供追溯）：
 05FE3CAF3834819E5C12018953502B582ECE6178639635FA600DE8D935054758
 ```
 
-> 核心 Demo 事件 `TPE_2026_ACC_001`（RD_TPE_002 光復南路）的 `intersections` 於兩版一致，主場景判定不受此差異影響。
+> 2026-08-02 換版差異僅為 `RD_TPE_001`／`RD_TPE_011`／`RD_TPE_013` 三條路段的 `intersections` 排列順序，路段數與其餘欄位皆未變動。換版後已對全部 15 個路段與 `live_incidents.json` 的 3 筆事件重跑路線規劃，事故路口定位、主要路線、次要路線三項輸出 **15/15 與 3/3 完全一致**，決策結果零變動；比對記錄見 `data/DATA_NOTES.md`。
+>
+> 核心 Demo 事件 `TPE_2026_ACC_001`（RD_TPE_002 光復南路）的 `intersections` 本就兩版相同，主場景判定不受影響。
 
 ---
 
@@ -712,6 +717,7 @@ Base URL：`http://localhost:8000`　共 **33 個端點**
 | POST | `/api/simulation/pause` | 暫停 |
 | POST | `/api/simulation/seek` | 跳轉至指定時間 |
 | POST | `/api/simulation/tick` | 推進一個時間點 |
+| POST | `/api/simulation/reset` | 清除本輪運行狀態並回到 21:00 官方資料基準 |
 | GET | `/api/simulation/state` | 當前快照與預警 |
 | GET | `/api/simulation/alerts` | 累積預警紀錄 |
 | GET | `/api/simulation/timeline` | 時間軸與事件 marker |
@@ -845,9 +851,9 @@ class CrowdRecord:
 
 ## 11. 測試規格
 
-**總計 105 項，全數通過（執行時間約 2.4 秒）**
+**後端總計 171 項、前端總計 10 項，全數通過。**
 
-### 11.1 單元測試（12 檔 · 82 項）
+### 11.1 單元測試（123 項；下表列主要覆蓋檔案）
 
 | 檔案 | 項數 | 覆蓋範圍 |
 |---|---:|---|
@@ -864,7 +870,7 @@ class CrowdRecord:
 | `test_dispatch_flex.py` | 5 | 缺口提出抽調建議、抽調雙邊稽核、同級禁止抽調、拒絕觸發回填、降級釋出回填 |
 | `test_coordinator_summary.py` | 3 | 四段結構、確定性欄位、無事件時行為 |
 
-### 11.2 整合測試（4 檔 · 23 項）
+### 11.2 整合測試（48 項；下表列主要覆蓋檔案）
 
 | 檔案 | 項數 | 覆蓋範圍 |
 |---|---:|---|
@@ -872,6 +878,7 @@ class CrowdRecord:
 | `test_demo_scenarios.py` | 6 | 資料載入驗證、ACC_001 完整流程、EVT_002 人流事件、EVT_003 號誌故障、What-if 隔離、主動監測門檻 |
 | `test_advisor_chat_api.py` | 5 | What-if 路由、SOP 查詢路由、fallback、provenance SHA256、可信度端點 |
 | `test_custom_incident_api.py` | 5 | 未知路段拒絕、時間格式拒絕、enum 拒絕、完整流程、通報生命週期 API |
+| `test_simulation_reset_api.py` | 2 | 完整清除事件／資源／通報／救援走廊、重置冪等性 |
 
 ### 11.3 測試策略
 
@@ -892,7 +899,7 @@ class CrowdRecord:
 |---|---|---|
 | 純運算延遲（Rule + Routing + ETE） | < 100 ms | — |
 | 事件注入端到端（含 2 次 LLM 生成） | < 15 秒 | 60 秒內 |
-| 測試套件執行 | 2.4 秒（105 項） | — |
+| 後端測試套件執行 | 6.73 秒（171 項，本機本輪） | — |
 | LLM 單次呼叫延遲 | 2–8 秒（依用途） | — |
 | 前端輪詢週期 | 2.5 秒 | — |
 
@@ -905,7 +912,7 @@ class CrowdRecord:
 | 後端程式行數 | 3,713 |
 | 前端程式行數 | 3,394 |
 | API 端點 | 33 |
-| 自動化測試 | 105 |
+| 自動化測試 | 後端 171；前端 10 |
 | 前端頁面 | 6 |
 
 ---

@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field, field_validator
 from . import client as llm_client
 
 RULE_NAMES = {
-    1: "交通擁塞級別判定", 2: "車禍與路障應變", 3: "捷運與接駁分流",
+    1: "交通擁塞級別判定", 2: "車禍與路障應變", 3: "人潮與接駁分流",
     4: "大巨蛋散場啟動", 5: "號誌故障應變", 6: "數位通報與多語化", 7: "ETE 計算",
 }
 

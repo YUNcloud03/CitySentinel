@@ -3,6 +3,19 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return;
+          if (id.includes("maplibre-gl")) return "map-vendor";
+          if (id.includes("h3-js") || id.includes("@turf")) return "geo-vendor";
+          if (id.includes("zod")) return "validation-vendor";
+          if (id.includes("react")) return "react-vendor";
+        },
+      },
+    },
+  },
   server: {
     port: Number(process.env.PORT) || 5173,
     strictPort: false,

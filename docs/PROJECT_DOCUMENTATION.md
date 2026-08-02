@@ -326,21 +326,26 @@ def _parse_pct(value: str) -> float:
 
 ### 6.4 路網檔版本差異處理（重要）
 
-Downloads 內有兩份 `road_network_geometry.json`，其中 **3 條路段的 `intersections` 順序不同**。由於順序代表上游→下游、會直接影響 Routing Engine 的上下游判定，必須明確擇一：
+主辦方於 **2026-08-02 釋出新版** `road_network_geometry.json`，與前一版的唯一差異是
+**3 條路段的 `intersections` 排列順序**。由於順序代表上游→下游、會參與 Routing Engine
+的上下游判定，換版時必須逐項驗證影響：
 
-| 路段 | 散檔版順序 | 官方資料夾版（採用） |
+| 路段 | 前一版 | 新版（現行採用） |
 |---|---|---|
-| RD_TPE_001 忠孝東路四段 | 延吉街→光復南路→基隆路一段 | **光復南路→延吉街→基隆路一段** |
-| RD_TPE_011 松壽路 | 基隆路一段→市府路→松智路 | **基隆路一段→松智路→市府路** |
-| RD_TPE_013 信義路五段 | 基隆路一段→市府路→松智路 | **基隆路一段→松智路→市府路** |
+| RD_TPE_001 忠孝東路四段 | 光復南路→延吉街→基隆路一段 | **延吉街→光復南路→基隆路一段** |
+| RD_TPE_011 松壽路 | 基隆路一段→松智路→市府路 | **基隆路一段→市府路→松智路** |
+| RD_TPE_013 信義路五段 | 基隆路一段→松智路→市府路 | **基隆路一段→市府路→松智路** |
 
-**採用官方命題資料夾版為唯一 authoritative source**，系統只讀 `data/raw/`，並以 SHA256 標記版本（見 `data/DATA_NOTES.md`）：
+系統只讀 `data/raw/`，並以 SHA256 標記版本（見 `data/DATA_NOTES.md`）：
 
 ```
-SHA256: 05FE3CAF3834819E5C12018953502B582ECE6178639635FA600DE8D935054758
+現行採用版 SHA256: 741D253538AAF2BB25C60DEC9D4A8E8DEFECC27112FA09C7A9F1512ADB286B18
+前一版 SHA256    : 05FE3CAF3834819E5C12018953502B582ECE6178639635FA600DE8D935054758
 ```
 
-核心 Demo 事件 ACC_001（光復南路 RD_TPE_002）的 intersections 兩版一致，主場景不受影響。
+**換版影響實測：決策輸出零變動。** 對全部 15 個路段與 `live_incidents.json` 的 3 筆
+事件重跑路線規劃，事故路口定位、主要路線、次要路線三項輸出 15/15 與 3/3 完全一致；
+核心 Demo 事件 ACC_001（光復南路 RD_TPE_002）的 intersections 本就兩版相同。
 
 ---
 
@@ -536,6 +541,7 @@ Base URL：`http://localhost:8000`
 | POST | `/api/simulation/pause` | 暫停 |
 | POST | `/api/simulation/seek` | 跳轉（body: `timestamp`） |
 | POST | `/api/simulation/tick` | 推進一個時間點 |
+| POST | `/api/simulation/reset` | 清除本輪事件、資源占用、通報與救援走廊，回到 21:00 基準 |
 | GET | `/api/simulation/state` | 當前狀態 |
 | GET | `/api/simulation/alerts` | 累積預警記錄 |
 
@@ -615,7 +621,7 @@ Base URL：`http://localhost:8000`
 | 基地台/場站 | Circle，半徑依人數，漫遊 ≥30% 轉紫 |
 | 事故點 | 紅色圓點 |
 
-> hover 路段/場站顯示即時數值 popup。地圖座標為**示意用近似經緯度**（主辦資料未提供座標），畫面明確標註「處置判定不使用這些座標」。
+> hover 路段/場站顯示即時數值 popup。15 條路線幾何以主辦方 `road_network_geometry.json` 為準；號誌、行穿線與 CMS 另標示官方圖資來源，燈相與事件影響則明確標示為模擬。
 
 ### 資料更新機制
 
@@ -625,7 +631,7 @@ Base URL：`http://localhost:8000`
 
 ## 12. 測試
 
-**38 項測試全數通過**（`python -m pytest tests -q`）。
+**後端 171 項、前端 10 項測試全數通過**（`python -m pytest tests -q`、`npm test -- --run`）。
 
 | 檔案 | 涵蓋 |
 |---|---|
@@ -687,7 +693,7 @@ python -m pytest tests -q
 - ✅ 時序播放器 + 自動監測
 - ✅ CMS + 中英日韓通報模板
 - ✅ React + MapLibre Dashboard（瀏覽器實測通過）
-- ✅ 38 項測試全綠
+- ✅ 後端 171 項、前端 10 項測試全綠
 - ✅ git 版控（3 個 commit）
 
 ### 尚未做（誠實交代）

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type IncidentState, type SimView } from "./api";
+import { api, type IncidentState, type SimView, type ValidationSlaMeasurement } from "./api";
 import Cockpit from "./Cockpit";
 import RecommendationView from "./RecommendationView";
 import GlobeIntro from "./GlobeIntro";
@@ -27,7 +27,11 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(new Date());
   const [resourceKey, setResourceKey] = useState(0);
+  const [simulationGeneration, setSimulationGeneration] = useState(0);
+  const [validationSla, setValidationSla] = useState<ValidationSlaMeasurement | null>(null);
+  const [acknowledgedIncidents, setAcknowledgedIncidents] = useState<Set<string>>(() => new Set());
   const playingRef = useRef(false);
+  const validationStartedRef = useRef<number | null>(null);
 
   useEffect(() => {
     api.incidents().then((r) => setAvailable(r.available)).catch(() => {});
@@ -39,6 +43,24 @@ export default function App() {
   useEffect(() => {
     playingRef.current = view?.playing ?? false;
   }, [view?.playing]);
+
+  useEffect(() => {
+    if (page !== "command") return;
+    const preventViewportWheelZoom = (event: WheelEvent) => {
+      if (event.ctrlKey || event.metaKey) event.preventDefault();
+    };
+    const preventViewportKeyZoom = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && ["+", "-", "=", "0"].includes(event.key)) {
+        event.preventDefault();
+      }
+    };
+    window.addEventListener("wheel", preventViewportWheelZoom, { passive: false, capture: true });
+    window.addEventListener("keydown", preventViewportKeyZoom, { capture: true });
+    return () => {
+      window.removeEventListener("wheel", preventViewportWheelZoom, { capture: true });
+      window.removeEventListener("keydown", preventViewportKeyZoom, { capture: true });
+    };
+  }, [page]);
 
   useEffect(() => {
     const timer = setInterval(async () => {
@@ -69,31 +91,93 @@ export default function App() {
     setView(await api.simSeek("2026-05-20 21:00"));
   }, []);
 
-  const inject = useCallback(async (id: string) => {
+  const resetSimulation = useCallback(async () => {
+    if (!window.confirm("將清除目前事件、調度、通報與救援走廊，並回到 21:00 基準。確定重新開始？")) return;
     setBusy(true);
+    playingRef.current = false;
     try {
-      const state = await api.inject(id);
-      setIncident(state);
-      setResourceKey((k) => k + 1); // 資源已被調度，刷新庫存
-      // 事件時間點同步跳轉，讓地圖顏色與事件一致
-      setView(await api.simSeek(state.event.timestamp));
+      const result = await api.simReset();
+      setView(result.view);
+      setIncident(null);
+      setValidationSla(null);
+      setAcknowledgedIncidents(new Set());
+      validationStartedRef.current = null;
+      setResourceKey((k) => k + 1);
+      setSimulationGeneration((k) => k + 1);
+    } catch (error) {
+      window.alert(`重新開始失敗：${error instanceof Error ? error.message : "未知錯誤"}`);
     } finally {
       setBusy(false);
     }
   }, []);
 
+  const inject = useCallback(async (id: string) => {
+    setBusy(true);
+    const started = performance.now();
+    validationStartedRef.current = started;
+    setValidationSla(null);
+    try {
+      const state = await api.inject(id);
+      setAcknowledgedIncidents((current) => {
+        const next = new Set(current);
+        next.delete(state.incident_id);
+        return next;
+      });
+      setIncident(state);
+      setResourceKey((k) => k + 1); // 資源已被調度，刷新庫存
+      // 事件時間點同步跳轉，讓地圖顏色與事件一致
+      const nextView = await api.simSeek(state.event.timestamp);
+      setView(nextView);
+      setValidationSla({
+        incident_id: state.incident_id,
+        api_ready_ms: Math.round((performance.now() - started) * 100) / 100,
+        map_rendered_ms: null,
+        total_end_to_end_ms: null,
+      });
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  const markScenarioRendered = useCallback((incidentId: string) => {
+    const started = validationStartedRef.current;
+    if (started == null) return;
+    setValidationSla((current) => {
+      if (!current || current.incident_id !== incidentId || current.total_end_to_end_ms != null) return current;
+      const total = Math.round((performance.now() - started) * 100) / 100;
+      return {
+        ...current,
+        map_rendered_ms: Math.max(0, Math.round((total - current.api_ready_ms) * 100) / 100),
+        total_end_to_end_ms: total,
+      };
+    });
+  }, []);
+
   const refreshIncident = useCallback(async () => {
     if (!incident) return;
     // 調度／核准後立刻同步事件、庫存與地圖快照，不等下一次輪詢。
-    const [state, v] = await Promise.all([
+    const [next, v] = await Promise.all([
       api.incidentState(incident.incident_id),
       api.simState().catch(() => null),
     ]);
-    setIncident(state);
+    setIncident(next);
+    if (next.operational_status === "RESOLVED") {
+      setAcknowledgedIncidents((current) => new Set(current).add(next.incident_id));
+    }
     // 播放器尚未定位時 simState 沒有快照欄位，覆蓋上去會讓地圖整片清空。
     if (v?.sim_time) setView(v);
     setResourceKey((k) => k + 1);
   }, [incident]);
+
+  const acknowledgeIncident = useCallback((incidentId: string) => {
+    setAcknowledgedIncidents((current) => new Set(current).add(incidentId));
+  }, []);
+
+  const activateDecisionSimulation = useCallback(async () => {
+    const nextView = await api.simStart(2);
+    playingRef.current = true;
+    setView(nextView);
+  }, []);
 
   const seekTo = useCallback(async (ts: string) => {
     setView(await api.simSeek(ts));
@@ -121,6 +205,7 @@ export default function App() {
             <button className="primary" onClick={start}>▶ 播放</button>
           )}
           <button onClick={seekPreIncident}>⏭ 跳至事件前 (21:00)</button>
+          <button className="reset-simulation" disabled={busy} onClick={resetSimulation}>↺ 重新開始模擬</button>
           {view?.progress && (
             <span className="dim">{view.progress.index + 1}/{view.progress.total}</span>
           )}
@@ -134,9 +219,22 @@ export default function App() {
           available={available}
           busy={busy}
           resourceKey={resourceKey}
+          simulationGeneration={simulationGeneration}
+          validationSla={validationSla}
+          incidentAcknowledged={Boolean(incident && acknowledgedIncidents.has(incident.incident_id))}
+          onAcknowledgeIncident={acknowledgeIncident}
+          onDecisionAccepted={activateDecisionSimulation}
+          onScenarioRendered={markScenarioRendered}
           onInject={inject}
           onInjectedCustom={(state) => {
             setIncident(state);
+            setAcknowledgedIncidents((current) => {
+              const next = new Set(current);
+              next.delete(state.incident_id);
+              return next;
+            });
+            setValidationSla(null);
+            validationStartedRef.current = null;
             setResourceKey((k) => k + 1);
             api.simSeek(state.event.timestamp).then(setView).catch(() => {});
           }}

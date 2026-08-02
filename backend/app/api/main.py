@@ -22,6 +22,7 @@ from ..llm import advisor, generator
 from ..llm.agent import AdvisorAgent
 from ..llm.client import CALL_LOG, get_provider
 from ..simulation.player import SimulationPlayer
+from ..simulation.plan_comparison import build_plan_comparison, replay_plan_comparison
 from ..engines.signal_timing import calculate_signal_plan
 from ..audit import (
     confidence_contract,
@@ -43,6 +44,7 @@ bundle = DataBundle()
 coordinator = Coordinator(bundle)
 player = SimulationPlayer(bundle)
 advisor_agent = AdvisorAgent(bundle, coordinator, player)
+plan_comparison_runs: dict[str, dict] = {}
 
 
 class SimulationStartRequest(BaseModel):
@@ -93,6 +95,23 @@ class SignalTimingRequest(BaseModel):
     segment_ids: list[str] = Field(min_length=2, max_length=4)
 
 
+class ManualPlanControls(BaseModel):
+    green_extension_pct: int = Field(default=0, ge=0, le=25)
+    diversion_share: float = Field(default=0, ge=0, le=0.75)
+    police_units: int = Field(default=0, ge=0, le=12)
+
+
+class PlanComparisonRequest(BaseModel):
+    incident_id: str = Field(min_length=1, max_length=128)
+    random_seed: int = Field(default=42, ge=0, le=2_147_483_647)
+    manual_controls: ManualPlanControls | None = None
+
+
+class PlanApprovalRequest(BaseModel):
+    plan_id: str = Field(min_length=1, max_length=32)
+    approved_by: str = Field(default="指揮官", min_length=2, max_length=64)
+
+
 # ---- 基礎資料 ----
 
 @app.get("/api/health")
@@ -118,6 +137,18 @@ def road_network():
                             "alternatives": list(seg.alternatives),
                             "nearby_stations": list(seg.nearby_stations)}
             for seg in bundle.network.values()]
+
+
+@app.get("/api/crowd-stations")
+def crowd_stations():
+    """Return organizer station IDs and labels available to custom crowd events."""
+    stations = {}
+    for record in bundle.crowd:
+        stations.setdefault(record.bs_id, record.location_name)
+    return [
+        {"station_id": station_id, "name": name}
+        for station_id, name in sorted(stations.items())
+    ]
 
 
 @app.get("/api/sop")
@@ -150,6 +181,127 @@ def simulation_tick():
 @app.get("/api/simulation/state")
 def simulation_state():
     return player.current_view()
+
+
+@app.post("/api/simulation/reset")
+def simulation_reset():
+    """Start a new deterministic run from the organizer-data baseline.
+
+    Resetting is intentionally broader than seeking: no incident, allocation,
+    notification, corridor or prior simulation-run state may leak into the new run.
+    """
+    cleared = {
+        "incidents": len(coordinator.incident_states),
+        "notifications": len(bundle.notification_center.list()),
+        "green_corridors": len(green_corridor_runs),
+        "custom_runs": len(simulation_runs),
+        "plan_comparison_runs": len(plan_comparison_runs),
+        "llm_audit_entries": len(CALL_LOG),
+    }
+    coordinator.reset()
+    green_corridor_runs.clear()
+    simulation_runs.clear()
+    plan_comparison_runs.clear()
+    _alert_summary_cache.clear()
+    CALL_LOG.clear()
+    view = player.reset("2026-05-20 21:00")
+    return {
+        "status": "reset",
+        "baseline_timestamp": view["sim_time"],
+        "cleared": cleared,
+        "view": view,
+    }
+
+
+@app.get("/api/simulation/comparison")
+def simulation_comparison():
+    """後端統一產生的基準／事件／處置比較證據，不允許前端自行推導。"""
+    comparison = player.current_view().get("scenario_comparison")
+    if comparison is None:
+        raise HTTPException(status_code=409, detail="目前沒有可比較的進行中道路事件")
+    return comparison
+
+
+@app.post("/api/simulation/plan-comparison")
+def create_plan_comparison(req: PlanComparisonRequest):
+    """Build and persist deterministic constrained optimization evidence."""
+    state = coordinator.incident_states.get(req.incident_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail=f"事件 {req.incident_id} 尚未處理")
+    try:
+        config = {"random_seed": req.random_seed}
+        if req.manual_controls is not None:
+            config["manual_controls"] = req.manual_controls.model_dump()
+        result = build_plan_comparison(bundle, state, config)
+    except KeyError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    plan_comparison_runs[result["simulation_run_id"]] = result
+    return result
+
+
+@app.get("/api/simulation/plan-comparison/{run_id}")
+def get_plan_comparison(run_id: str):
+    result = plan_comparison_runs.get(run_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"模擬 Run {run_id} 不存在")
+    return result
+
+
+@app.post("/api/simulation/plan-comparison/{run_id}/replay")
+def replay_saved_plan_comparison(run_id: str):
+    stored = plan_comparison_runs.get(run_id)
+    if stored is None:
+        raise HTTPException(status_code=404, detail=f"模擬 Run {run_id} 不存在")
+    state = coordinator.incident_states.get(stored["scenario_id"])
+    if state is None:
+        raise HTTPException(status_code=409, detail="原始事件狀態已重設，無法重播")
+    return replay_plan_comparison(bundle, stored, state)
+
+
+@app.post("/api/simulation/plan-comparison/{run_id}/approve")
+def approve_plan_comparison(run_id: str, req: PlanApprovalRequest):
+    """Approve one feasible package and make it the active simulation controller."""
+    from ..data_loader import format_ts, parse_ts
+    stored = plan_comparison_runs.get(run_id)
+    if stored is None:
+        raise HTTPException(status_code=404, detail=f"模擬 Run {run_id} 不存在")
+    plan = next((row for row in stored["plans"] if row["plan_id"] == req.plan_id), None)
+    if plan is None:
+        raise HTTPException(status_code=404, detail=f"方案 {req.plan_id} 不存在")
+    if not plan.get("eligible") or not plan.get("controls"):
+        raise HTTPException(status_code=409, detail="此方案未通過硬性限制，禁止核准")
+    state = coordinator.incident_states.get(stored["scenario_id"])
+    if state is None:
+        raise HTTPException(status_code=409, detail="原始事件狀態已重設，無法核准")
+    current_sim_time = player.current_view()["sim_time"]
+    effective_sim_time = max(parse_ts(current_sim_time), datetime.fromisoformat(stored["started_at"]))
+    approval = {
+        "run_id": run_id,
+        "plan_id": plan["plan_id"],
+        "plan_name": plan["name"],
+        "approved_by": req.approved_by,
+        "approved_at": datetime.now().isoformat(timespec="seconds"),
+        "approved_sim_time": format_ts(effective_sim_time),
+        "controls": plan["controls"],
+        "commands": plan["executable_commands"],
+        "forecast_series": plan["forecast_series"],
+        "score": plan["score"],
+        "status": "ACTIVE_IN_SIMULATION",
+    }
+    state["approved_optimization"] = approval
+    state.setdefault("decision_trace", []).append({
+        "step": "OPTIMIZED_PLAN_APPROVED",
+        "at": approval["approved_at"],
+        "detail": approval,
+    })
+    stored["approval_status"] = "APPROVED_FOR_SIMULATION"
+    stored["approved_plan"] = approval
+    return {
+        "simulation_run_id": run_id,
+        "scenario_id": stored["scenario_id"],
+        "approval_status": stored["approval_status"],
+        "approved_plan": approval,
+    }
 
 
 @app.get("/api/simulation/alerts")
@@ -215,7 +367,9 @@ def inject_incident(req: IncidentInjectRequest):
 
     try:
         at = parse_ts(req.at) if req.at else None
-        return coordinator.inject_incident(req.event_id, at=at)
+        state = coordinator.inject_incident(req.event_id, at=at)
+        player.activate_incident(state)
+        return state
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -275,7 +429,10 @@ def green_corridor(req: GreenCorridorRequest):
     real signal, dispatch, or public-notification operation.
     """
     try:
-        result = simulate_green_corridor(bundle, req.model_dump())
+        scenario = req.model_dump()
+        if player.active_incident_state:
+            scenario["_incident_state"] = player.active_incident_state
+        result = simulate_green_corridor(bundle, scenario)
         green_corridor_runs[result["scenario_id"]] = result
         return result
     except KeyError as exc:
@@ -376,16 +533,24 @@ def notification_op(notification_id: str, op: Literal["approve", "dispatch", "re
 class CustomIncidentRequest(BaseModel):
     type: str = Field(min_length=2, max_length=64)
     affected_segment: str
-    status: Literal["Closed", "Blocked", "Restricted", "Caution"]
+    status: Literal["Closed", "Blocked", "Restricted", "Caution", "Crowded", "Surging", "Dispersing"]
     severity: Literal["Critical", "High", "Medium", "Low"]
     location: str = ""
     description: str = ""
     source_type: Literal["official", "operator", "iot", "camera", "citizen", "unknown"] = "operator"
     source_id: str = "dashboard-operator"
     human_confirmed: bool = True
+    affected_direction: Literal["both", "northbound", "southbound", "eastbound", "westbound"] = "both"
+    lanes_total: int = Field(default=2, ge=1, le=8)
+    lanes_closed: int = Field(default=1, ge=0, le=8)
+    review_interval_minutes: int = Field(default=15, ge=5, le=120)
     timestamp: str = Field(pattern=r"^2026-05-20 ([01]\d|2[0-3]):[0-5]\d$")
     # Demo 用漫遊率假設值；None＝沿用該時間切面的實際資料
     roaming_override_pct: float | None = Field(default=None, ge=0, le=100)
+    crowd_user_count_override: int | None = Field(default=None, ge=0, le=200_000)
+    crowd_growth_rate_override: float | None = Field(default=None, ge=-1, le=5)
+    crowd_roaming_user_pct_override: float | None = Field(default=None, ge=0, le=100)
+    crowd_stay_time_avg_override: float | None = Field(default=None, ge=0, le=600)
 
     @field_validator("affected_segment")
     @classmethod
@@ -406,13 +571,33 @@ def inject_custom_incident(req: CustomIncidentRequest):
         raise HTTPException(status_code=422, detail=f"路段 {req.affected_segment} 不存在於路網")
     if req.affected_segment.startswith("BS_") and req.affected_segment not in known_stations:
         raise HTTPException(status_code=422, detail=f"基地台 {req.affected_segment} 不存在")
+    if req.lanes_closed > req.lanes_total:
+        raise HTTPException(status_code=422, detail="封閉車道數不可大於總車道數")
+    is_crowd = req.type == "Crowd_Surge_Injury"
+    if is_crowd and not req.affected_segment.startswith("BS_"):
+        raise HTTPException(status_code=422, detail="人潮事件必須選擇 BS_ 站點")
+    if not is_crowd and not req.affected_segment.startswith("RD_"):
+        raise HTTPException(status_code=422, detail="道路事件必須選擇 RD_ 路段")
 
     run_id = f"SIMRUN-{len(simulation_runs) + 1:03d}"
     # 覆寫值是判定參數而非事件屬性，不併入 incident（否則會混進稽核用的事件內容）
-    payload = req.model_dump()
-    roaming_override = payload.pop("roaming_override_pct", None)
-    incident = {"event_id": f"CUSTOM_{run_id}", **payload}
-    state = coordinator.process_incident(incident, roaming_override_pct=roaming_override)
+    incident_payload = req.model_dump()
+    roaming_override = incident_payload.pop("roaming_override_pct", None)
+    crowd_overrides = {
+        "user_count": incident_payload.pop("crowd_user_count_override", None),
+        "growth_rate": incident_payload.pop("crowd_growth_rate_override", None),
+        "roaming_user_pct": incident_payload.pop("crowd_roaming_user_pct_override", None),
+        "stay_time_avg": incident_payload.pop("crowd_stay_time_avg_override", None),
+    }
+    if req.status == "Closed":
+        incident_payload["lanes_closed"] = req.lanes_total
+    incident = {"event_id": f"CUSTOM_{run_id}", **incident_payload}
+    state = coordinator.process_incident(
+        incident,
+        roaming_override_pct=roaming_override,
+        crowd_overrides=crowd_overrides if is_crowd else None,
+    )
+    player.activate_incident(state)
     simulation_runs.append({
         "simulation_run_id": run_id,
         "event_payload": incident,
@@ -428,6 +613,28 @@ def inject_custom_incident(req: CustomIncidentRequest):
 @app.get("/api/simulation-runs")
 def list_simulation_runs():
     return simulation_runs
+
+
+class IncidentResolveRequest(BaseModel):
+    operator: str = Field(default="traffic_commander_01", min_length=2, max_length=64)
+    reason: str = Field(min_length=4, max_length=500)
+
+
+@app.post("/api/incidents/{incident_id}/resolve")
+def resolve_incident(incident_id: str, req: IncidentResolveRequest):
+    """Human-confirmed operational closure; time alone never resolves an incident."""
+    simulation_time = player.current_view().get("sim_time")
+    if not simulation_time:
+        raise HTTPException(status_code=409, detail="模擬尚未開始，無法結案")
+    try:
+        return coordinator.resolve_incident(
+            incident_id,
+            operator=req.operator,
+            reason=req.reason,
+            simulation_time=simulation_time,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 # ---- AI 摘要（LLM 解釋已驗證的決策；失敗走模板） ----
@@ -793,9 +1000,11 @@ def dispatch_action(incident_id: str, action_id: str, req: DispatchActionRequest
                 reason=req.reason, operator=req.operator,
             )
         else:
+            simulation_time = player.current_view().get("sim_time")
             state = coordinator.dispatch_action(
                 incident_id, action_id, req.op,
                 count=req.count, reason=req.reason, operator=req.operator,
+                simulation_time=simulation_time,
             )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

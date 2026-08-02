@@ -52,7 +52,7 @@ def main() -> None:
     parser.add_argument("--csv", type=Path, required=True)
     parser.add_argument("--roads", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--corridor-metres", type=float, default=75)
+    parser.add_argument("--corridor-metres", type=float, default=40)
     args = parser.parse_args()
 
     with args.csv.open(encoding="utf-8-sig", newline="") as source:
